@@ -154,15 +154,14 @@ def _compute_all_subscores(results) -> dict:
         else:
             raise ValueError(f"Unknown question type: {question_type}")
 
+    direction_keys = [
+        "object_rel_direction_easy_accuracy",
+        "object_rel_direction_medium_accuracy",
+        "object_rel_direction_hard_accuracy",
+    ]
+    direction_scores = [output.pop(key) for key in direction_keys if key in output]
     output["object_rel_direction_accuracy"] = (
-        sum(
-            [
-                output.pop("object_rel_direction_easy_accuracy"),
-                output.pop("object_rel_direction_medium_accuracy"),
-                output.pop("object_rel_direction_hard_accuracy"),
-            ]
-        )
-        / 3.0
+        sum(direction_scores) / len(direction_scores) if direction_scores else 0.0
     )
 
     output["overall"] = sum([_ for _ in output.values()]) / len(output)
