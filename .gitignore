@@ -38,6 +38,7 @@ cache_dir
 temp/
 outputs/
 output/
+experiment_artifacts/
 
 # Logs
 logs/

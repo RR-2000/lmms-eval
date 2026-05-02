@@ -147,4 +147,23 @@ class Qwen3VLExperimentsConfig(PreTrainedConfig):
         super().__post_init__(**kwargs)
 
 
-__all__ = ["Qwen3VLExperimentsConfig", "Qwen3VLExperimentsTextConfig"]
+# -----------------------------------------------------------------------------
+# Compatibility aliases
+#
+# The generated modeling code (and some downstream utilities) expect the original
+# Qwen3-VL config class names. Provide aliases so imports like
+# `from .configuration_qwen3_vl_experiments import Qwen3VLConfig` work.
+# -----------------------------------------------------------------------------
+Qwen3VLVisionConfig = Qwen3VLExperimentsVisionConfig
+Qwen3VLTextConfig = Qwen3VLExperimentsTextConfig
+Qwen3VLConfig = Qwen3VLExperimentsConfig
+
+
+__all__ = [
+    "Qwen3VLExperimentsVisionConfig",
+    "Qwen3VLExperimentsTextConfig",
+    "Qwen3VLExperimentsConfig",
+    "Qwen3VLVisionConfig",
+    "Qwen3VLTextConfig",
+    "Qwen3VLConfig",
+]

@@ -1,7 +1,14 @@
 import re
+import os
+import json
+from datetime import datetime
+from pathlib import Path
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
@@ -38,15 +45,441 @@ def _resolve_model_class(pretrained: str, is_moe: bool):
         model_cls = Qwen3_5MoeForConditionalGeneration if is_moe else Qwen3_5ForConditionalGeneration
         dtype_key = "torch_dtype"
     else:
-        from transformers import (
-            Qwen3VLForConditionalGeneration,
-            Qwen3VLMoeForConditionalGeneration,
-        )
+        if is_moe:
+            try:
+                from lmms_eval.experiment_models.qwen3_vl_experiments import Qwen3VLMoeForConditionalGeneration
 
-        model_cls = Qwen3VLMoeForConditionalGeneration if is_moe else Qwen3VLForConditionalGeneration
+                model_cls = Qwen3VLMoeForConditionalGeneration
+            except ImportError as exc:
+                raise ImportError(
+                    "MoE Qwen3-VL checkpoints are not supported by the local 'qwen3_vl_experiments' fork "
+                    "(missing Qwen3VLMoeForConditionalGeneration). Use a dense Qwen3-VL checkpoint or extend the "
+                    "experiments fork with a MoE implementation."
+                ) from exc
+        else:
+            from lmms_eval.experiment_models.qwen3_vl_experiments import Qwen3VLForConditionalGeneration
+
+            model_cls = Qwen3VLForConditionalGeneration
         dtype_key = "dtype"
 
     return model_cls, dtype_key
+
+
+def _best_factor_pair(n: int) -> tuple[int, int]:
+    if n <= 0:
+        return 1, 1
+    r = int(n**0.5)
+    for a in range(r, 0, -1):
+        if n % a == 0:
+            return a, n // a
+    return 1, n
+
+
+def _to_uint8_video(frames) -> Optional[np.ndarray]:
+    if frames is None:
+        return None
+    if isinstance(frames, torch.Tensor):
+        arr = frames.detach().cpu().numpy()
+    else:
+        arr = np.asarray(frames)
+
+    # Expect (T, H, W, C) or (T, C, H, W)
+    if arr.ndim == 4 and arr.shape[1] in (1, 3) and arr.shape[-1] not in (1, 3):
+        arr = np.transpose(arr, (0, 2, 3, 1))
+
+    if arr.dtype != np.uint8:
+        arr_f = arr.astype(np.float32)
+        maxv = float(np.nanmax(arr_f)) if arr_f.size else 0.0
+        minv = float(np.nanmin(arr_f)) if arr_f.size else 0.0
+        if maxv <= 1.0 and minv >= 0.0:
+            arr_f = arr_f * 255.0
+        arr = np.clip(arr_f, 0.0, 255.0).astype(np.uint8)
+    return arr
+
+
+def _ensure_uint8_rgb(frames_uint8: np.ndarray) -> np.ndarray:
+    arr = frames_uint8
+    if arr.ndim != 4:
+        raise ValueError(f"Expected 4D video array (T,H,W,C); got shape {arr.shape}")
+    if arr.shape[-1] == 1:
+        arr = np.repeat(arr, 3, axis=-1)
+    if arr.shape[-1] != 3:
+        raise ValueError(f"Expected C=3; got shape {arr.shape}")
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8)
+    return arr
+
+
+def _try_write_mp4(path: Path, frames_uint8: np.ndarray, fps: Optional[float] = None) -> tuple[bool, Optional[str]]:
+    """Best-effort mp4 writer.
+
+    Prefers OpenCV (available in the cluster env), falls back to imageio if present.
+    Returns (ok, error_message).
+    """
+
+    fps_val = float(fps) if fps is not None else 30.0
+
+    ffmpeg_err = None
+    # Prefer ffmpeg H.264 (yuv420p) for broad playback compatibility (incl. VS Code preview).
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is not None:
+        try:
+            rgb = _ensure_uint8_rgb(frames_uint8)
+            h, w = int(rgb.shape[1]), int(rgb.shape[2])
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-s",
+                f"{w}x{h}",
+                "-r",
+                str(fps_val),
+                "-i",
+                "-",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                str(path),
+            ]
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            assert proc.stdin is not None
+            for frame in rgb:
+                proc.stdin.write(frame.tobytes())
+            proc.stdin.close()
+            _, err = proc.communicate()
+            if proc.returncode != 0:
+                ffmpeg_err = err.decode("utf-8", errors="ignore")[-2000:]
+            else:
+                return True, None
+        except Exception as exc:
+            ffmpeg_err = str(exc)
+    try:
+        import cv2  # type: ignore
+
+        rgb = _ensure_uint8_rgb(frames_uint8)
+        h, w = int(rgb.shape[1]), int(rgb.shape[2])
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # OpenCV expects BGR
+        fourcc_candidates = ["mp4v", "avc1", "H264"]
+        writer = None
+        last_err = None
+        for fourcc_str in fourcc_candidates:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+                writer = cv2.VideoWriter(str(path), fourcc, fps_val, (w, h), True)
+                if writer is not None and writer.isOpened():
+                    last_err = None
+                    break
+                if writer is not None:
+                    writer.release()
+                writer = None
+            except Exception as exc:
+                last_err = str(exc)
+                writer = None
+
+        if writer is None:
+            return False, last_err or "cv2.VideoWriter could not be opened"
+
+        for frame in rgb:
+            bgr = frame[..., ::-1]
+            writer.write(bgr)
+        writer.release()
+        return True, None
+    except Exception as exc:
+        # Fallback: imageio (if installed)
+        try:
+            import imageio.v2 as imageio  # type: ignore
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with imageio.get_writer(str(path), fps=fps_val) as writer:
+                for frame in _ensure_uint8_rgb(frames_uint8):
+                    writer.append_data(frame)
+            return True, None
+        except Exception as exc2:
+            ffmpeg_part = f"ffmpeg error: {ffmpeg_err}; " if ffmpeg_err else ""
+            msg = f"{ffmpeg_part}cv2 error: {exc}; imageio error: {exc2}"
+            eval_logger.warning(f"Failed to write mp4 '{path}': {msg}")
+            return False, msg
+
+
+def _normalize_to_uint8_heatmap(attn: np.ndarray) -> np.ndarray:
+    # attn: (T, H, W) float in [0, 1] or unnormalized
+    a = attn.astype(np.float32)
+    if np.nanmax(a) > 1.0 or np.nanmin(a) < 0.0:
+        a = a - np.nanmin(a)
+        denom = np.nanmax(a)
+        if denom > 0:
+            a = a / denom
+    a = (a * 255.0).clip(0, 255).astype(np.uint8)
+    # grayscale -> RGB
+    return np.repeat(a[..., None], 3, axis=-1)
+
+
+def _attention_to_binary_mask_uint8(attn_01_thw: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+    """Convert normalized attention in [0,1] to a binary RGB mask video (uint8)."""
+    a = np.nan_to_num(attn_01_thw.astype(np.float32), nan=0.0, posinf=1.0, neginf=0.0)
+    m = (a >= float(threshold)).astype(np.uint8) * 255
+    return np.repeat(m[..., None], 3, axis=-1)
+
+
+def _normalize_attention_01(attn_map_thw: np.ndarray) -> tuple[np.ndarray, dict]:
+    """Normalize attention map to [0,1] (per-clip) and return stats."""
+    a = attn_map_thw.astype(np.float32)
+    amin = float(np.nanmin(a)) if a.size else 0.0
+    amax = float(np.nanmax(a)) if a.size else 0.0
+    a = a - amin
+    denom = float(np.nanmax(a)) if a.size else 0.0
+    if denom > 0:
+        a = a / denom
+    a = np.nan_to_num(a, nan=0.0, posinf=1.0, neginf=0.0)
+    return a.clip(0.0, 1.0), {"attn_min": amin, "attn_max": amax}
+
+
+def _resize_attn_to_frame(attn_hw01: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
+    """Resize a single (h,w) attention map to (H,W) using bilinear."""
+    import cv2  # type: ignore
+
+    return cv2.resize(attn_hw01.astype(np.float32), (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+
+
+def _overlay_attention_red(video_uint8_thwc: np.ndarray, attn_01_thw: np.ndarray, strength: float = 0.85) -> np.ndarray:
+    """Overlay red where attention is high.
+
+    Output = (1-a)*orig + a*red, where a = strength * attn.
+    """
+    rgb = _ensure_uint8_rgb(video_uint8_thwc)
+    t, h, w, _ = rgb.shape
+    out = np.empty_like(rgb)
+    red = np.zeros((h, w, 3), dtype=np.float32)
+    red[..., 0] = 255.0
+    for i in range(t):
+        a = attn_01_thw[min(i, attn_01_thw.shape[0] - 1)]
+        a_big = _resize_attn_to_frame(a, h, w)
+        alpha = (strength * a_big).clip(0.0, 1.0)[..., None]
+        out[i] = ((1.0 - alpha) * rgb[i].astype(np.float32) + alpha * red).clip(0, 255).astype(np.uint8)
+    return out
+
+
+def _save_vertical_stack_png(path: Path, images_uint8: list[np.ndarray]) -> tuple[bool, Optional[str]]:
+    """Stack multiple rollout images vertically into one PNG."""
+    try:
+        def _ensure_uint8_rgb_image(img: np.ndarray) -> np.ndarray:
+            arr = np.asarray(img)
+            if arr.ndim != 3:
+                raise ValueError(f"Expected 3D image (H,W,C); got shape {arr.shape}")
+            if arr.dtype != np.uint8:
+                arr = arr.clip(0, 255).astype(np.uint8)
+            if arr.shape[-1] == 1:
+                arr = np.repeat(arr, 3, axis=-1)
+            if arr.shape[-1] != 3:
+                raise ValueError(f"Expected C=3; got shape {arr.shape}")
+            return arr
+
+        pil_images = [Image.fromarray(_ensure_uint8_rgb_image(img)) for img in images_uint8]
+        widths = [im.size[0] for im in pil_images]
+        heights = [im.size[1] for im in pil_images]
+        W = max(widths)
+        H = sum(heights)
+        canvas = Image.new("RGB", (W, H))
+        y = 0
+        for im in pil_images:
+            canvas.paste(im, (0, y))
+            y += im.size[1]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(path)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _compute_vsibench_accuracy(doc: dict, prediction: str) -> tuple[Optional[float], dict]:
+    """Compute per-sample score matching vsibench_process_results (approx).
+
+    Returns (score, debug) where score is:
+    - MCA: exact match accuracy in {0,1}
+    - NA:  mean relative accuracy in [0,1]
+    """
+    debug: dict = {}
+    try:
+        from lmms_eval.tasks.vsibench.utils import (
+            MCA_QUESTION_TYPES,
+            NA_QUESTION_TYPES,
+            fuzzy_matching,
+            exact_match,
+            mean_relative_accuracy,
+            to_float,
+        )
+
+        gt = doc.get("ground_truth")
+        qtype = doc.get("question_type")
+        debug["ground_truth"] = gt
+        debug["question_type"] = qtype
+        pred = fuzzy_matching(prediction or "")
+        if qtype in MCA_QUESTION_TYPES:
+            return float(exact_match(pred, str(gt))), debug
+        if qtype in NA_QUESTION_TYPES:
+            try:
+                return float(mean_relative_accuracy(to_float(pred), to_float(gt), start=0.5, end=0.95, interval=0.05)), debug
+            except Exception:
+                return 0.0, debug
+        return None, debug
+    except Exception as exc:
+        debug["error"] = str(exc)
+        return None, debug
+
+
+_SAFE_PATH_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
+
+
+def _safe_path_component(text: Optional[str], default: str = "unknown") -> str:
+    s = (text or "").strip()
+    if not s:
+        return default
+    s = _SAFE_PATH_RE.sub("_", s)
+    s = s.strip("._-")
+    return s or default
+
+
+def _save_rollout_png(path: Path, frames_uint8_thwc: np.ndarray) -> tuple[bool, Optional[str]]:
+    """Save frames concatenated horizontally as a single PNG."""
+    try:
+        from PIL import Image
+
+        rgb = _ensure_uint8_rgb(frames_uint8_thwc)
+        t, h, w, _ = rgb.shape
+        canvas = Image.new("RGB", (w * t, h))
+        for i in range(t):
+            canvas.paste(Image.fromarray(rgb[i]), (i * w, 0))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(path)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _save_experiment_artifacts(
+    out_dir: Path,
+    sample_tag: str,
+    attn_map_thw: Optional[np.ndarray],
+    video_uint8: Optional[np.ndarray],
+    metadata: dict,
+    save_mp4: bool = False,
+    save_npz: bool = False,
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = out_dir / sample_tag
+
+    arrays: dict[str, np.ndarray] = {}
+    attn_norm_01 = None
+    attn_stats = None
+    if attn_map_thw is not None:
+        attn_norm_01, attn_stats = _normalize_attention_01(attn_map_thw)
+        arrays["attn_map_thw"] = attn_map_thw.astype(np.float16)
+        arrays["attn_norm_01_thw"] = attn_norm_01.astype(np.float16)
+    if video_uint8 is not None:
+        arrays["video_uint8_thwc"] = video_uint8
+    if save_npz and arrays:
+        np.savez_compressed(base.with_suffix(".npz"), **arrays)
+
+    video_ok = None
+    video_err = None
+    if save_mp4 and video_uint8 is not None:
+        video_ok, video_err = _try_write_mp4(base.with_suffix(".mp4"), video_uint8, fps=metadata.get("video_fps"))
+
+    rollout_ok = None
+    rollout_err = None
+    if video_uint8 is not None:
+        rollout_ok, rollout_err = _save_rollout_png(base.with_name(base.name + "_rollout.png"), video_uint8)
+
+    attn_ok = None
+    attn_err = None
+    attn_rollout_ok = None
+    attn_rollout_err = None
+    if attn_norm_01 is not None:
+        heat = _normalize_to_uint8_heatmap(attn_norm_01)
+        if save_mp4:
+            attn_ok, attn_err = _try_write_mp4(base.with_name(base.name + "_attn.mp4"), heat, fps=metadata.get("video_fps"))
+        attn_rollout_ok, attn_rollout_err = _save_rollout_png(base.with_name(base.name + "_attn_rollout.png"), heat)
+
+    masked_ok = None
+    masked_err = None
+    masked_rollout_ok = None
+    masked_rollout_err = None
+    mask_rollout_ok = None
+    mask_rollout_err = None
+    mask_bin_rollout_ok = None
+    mask_bin_rollout_err = None
+    stacked_rollout_ok = None
+    stacked_rollout_err = None
+    if video_uint8 is not None and attn_norm_01 is not None:
+        overlay = _overlay_attention_red(video_uint8, attn_norm_01)
+        if save_mp4:
+            masked_ok, masked_err = _try_write_mp4(base.with_name(base.name + "_masked.mp4"), overlay, fps=metadata.get("video_fps"))
+        masked_rollout_ok, masked_rollout_err = _save_rollout_png(base.with_name(base.name + "_masked_rollout.png"), overlay)
+
+        # Also save the attention mask itself as rollout (heatmap already computed above)
+        heat = _normalize_to_uint8_heatmap(attn_norm_01)
+        mask_rollout_ok, mask_rollout_err = _save_rollout_png(base.with_name(base.name + "_mask_rollout.png"), heat)
+
+        # Binary mask derived from normalized attention
+        mask_bin = _attention_to_binary_mask_uint8(attn_norm_01, threshold=0.5)
+        mask_bin_rollout_ok, mask_bin_rollout_err = _save_rollout_png(base.with_name(base.name + "_mask_bin_rollout.png"), mask_bin)
+
+        # Vertical stack of rollouts: (original, heatmask, binary mask, masked)
+        def _rollout_array(frames_thwc: np.ndarray) -> np.ndarray:
+            frames = _ensure_uint8_rgb(frames_thwc)
+            t, h, w, _ = frames.shape
+            canvas = Image.new("RGB", (w * t, h))
+            for i in range(t):
+                canvas.paste(Image.fromarray(frames[i]), (i * w, 0))
+            return np.asarray(canvas)
+
+        orig_roll = _rollout_array(video_uint8)
+        mask_roll = _rollout_array(heat)
+        mask_bin_roll = _rollout_array(mask_bin)
+        masked_roll = _rollout_array(overlay)
+        stacked_rollout_ok, stacked_rollout_err = _save_vertical_stack_png(
+            base.with_name(base.name + "_stacked_rollout.png"),
+            [orig_roll, mask_roll, mask_bin_roll, masked_roll],
+        )
+
+    metadata = dict(metadata)
+    if attn_stats is not None:
+        metadata.update(attn_stats)
+    metadata["write_video_mp4_ok"] = video_ok
+    metadata["write_video_mp4_error"] = video_err
+    metadata["save_mp4"] = bool(save_mp4)
+    metadata["save_npz"] = bool(save_npz)
+    metadata["write_video_rollout_png_ok"] = rollout_ok
+    metadata["write_video_rollout_png_error"] = rollout_err
+    metadata["write_attn_mp4_ok"] = attn_ok
+    metadata["write_attn_mp4_error"] = attn_err
+    metadata["write_attn_rollout_png_ok"] = attn_rollout_ok
+    metadata["write_attn_rollout_png_error"] = attn_rollout_err
+    metadata["write_masked_mp4_ok"] = masked_ok
+    metadata["write_masked_mp4_error"] = masked_err
+    metadata["write_masked_rollout_png_ok"] = masked_rollout_ok
+    metadata["write_masked_rollout_png_error"] = masked_rollout_err
+    metadata["write_mask_rollout_png_ok"] = mask_rollout_ok
+    metadata["write_mask_rollout_png_error"] = mask_rollout_err
+    metadata["write_mask_bin_rollout_png_ok"] = mask_bin_rollout_ok
+    metadata["write_mask_bin_rollout_png_error"] = mask_bin_rollout_err
+    metadata["write_stacked_rollout_png_ok"] = stacked_rollout_ok
+    metadata["write_stacked_rollout_png_error"] = stacked_rollout_err
+
+    (base.with_suffix(".json")).write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
 
 
 @register_model("qwen3_vl_experiments")
@@ -89,6 +522,15 @@ class Qwen3_VL_Experiments(lmms):
     ) -> None:
         super().__init__()
         assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+
+        # For attention logging we need real attention weights.
+        # SDPA/flash kernels frequently return None for attention weights even when
+        # output_attentions=True. We use a step-wise capture path (no prefill
+        # attentions), so enabling eager here is typically safe memory-wise.
+        save_attn_env = os.environ.get("LMMS_EVAL_EXPERIMENTS_SAVE_ATTN", "0")
+        save_attn_enabled = save_attn_env not in ("", "0", "false", "False")
+        if save_attn_enabled and attn_implementation is None:
+            attn_implementation = "eager"
 
         valid_attn_implementations = [None, "flash_attention_2", "sdpa", "eager"]
         if attn_implementation not in valid_attn_implementations:
@@ -265,7 +707,7 @@ class Qwen3_VL_Experiments(lmms):
             return remaining.strip()
         return answer
 
-    def _preprocess_chunk(self, chunk):
+    def _preprocess_chunk(self, chunk, return_media: bool = False):
         """Preprocess a batch chunk on CPU: message building, video decoding, tokenization.
 
         Returns (inputs, contexts, gen_kwargs, until) with inputs still on CPU.
@@ -387,7 +829,338 @@ class Qwen3_VL_Experiments(lmms):
                 return_tensors="pt",
             )
 
+        if return_media:
+            return inputs, contexts, gen_kwargs, until, texts, video_inputs, video_metadata_list
         return inputs, contexts, gen_kwargs, until
+
+    def _locate_vision_token_indices(self, input_ids: torch.Tensor) -> tuple[list[torch.Tensor], dict]:
+        """Locate vision-token key positions inside the prompt input_ids."""
+
+        debug: dict = {
+            "vision_locator": None,
+            "vision_token_counts": None,
+        }
+
+        config = getattr(self.model, "config", None)
+        image_token_id = getattr(config, "image_token_id", None)
+        video_token_id = getattr(config, "video_token_id", None)
+        vision_start_token_id = getattr(config, "vision_start_token_id", None)
+        vision_end_token_id = getattr(config, "vision_end_token_id", None)
+
+        idx_lists: list[torch.Tensor] = []
+        if image_token_id is not None or video_token_id is not None:
+            mask = torch.zeros_like(input_ids, dtype=torch.bool)
+            if image_token_id is not None:
+                mask |= input_ids.eq(int(image_token_id))
+            if video_token_id is not None:
+                mask |= input_ids.eq(int(video_token_id))
+            if mask.any():
+                debug["vision_locator"] = "image_token_id/video_token_id"
+                for b in range(input_ids.shape[0]):
+                    idx_lists.append(torch.nonzero(mask[b], as_tuple=False).squeeze(-1))
+
+        if not idx_lists and vision_start_token_id is not None and vision_end_token_id is not None:
+            debug["vision_locator"] = "vision_start->vision_end"
+            vs = int(vision_start_token_id)
+            ve = int(vision_end_token_id)
+            for b in range(input_ids.shape[0]):
+                ids = input_ids[b]
+                starts = torch.nonzero(ids.eq(vs), as_tuple=False).squeeze(-1)
+                ends = torch.nonzero(ids.eq(ve), as_tuple=False).squeeze(-1)
+                seg_idxs = []
+                if starts.numel() and ends.numel():
+                    for s in starts.tolist():
+                        e_candidates = ends[ends > s]
+                        if e_candidates.numel() == 0:
+                            continue
+                        e = int(e_candidates[0].item())
+                        if e > s + 1:
+                            seg_idxs.append(torch.arange(s + 1, e, device=ids.device))
+                if seg_idxs:
+                    idx_lists.append(torch.cat(seg_idxs))
+                else:
+                    idx_lists.append(ids.new_zeros((0,), dtype=torch.long))
+
+        if not idx_lists:
+            debug["vision_locator"] = "none"
+            idx_lists = [input_ids.new_zeros((0,), dtype=torch.long) for _ in range(input_ids.shape[0])]
+
+        debug["vision_token_counts"] = [int(x.numel()) for x in idx_lists]
+        return idx_lists, debug
+
+    def _avg_attn_vec_to_vision_from_step(self, step_attentions, idx_lists: list[torch.Tensor]) -> tuple[Optional[torch.Tensor], dict]:
+        """Compute (B, max_n_vision) attention-to-vision for a single decoded token step.
+
+        step_attentions: expected tuple(layers) of (B, H, 1, S) or (B, H, S).
+        """
+
+        debug = {"attn_layers": None, "no_valid_attention_tensors": False, "none_layer_count": 0}
+        if step_attentions is None:
+            debug["no_valid_attention_tensors"] = True
+            return None, debug
+
+        layer_tensors = []
+        for layer_attn in (step_attentions if isinstance(step_attentions, (tuple, list)) else [step_attentions]):
+            if layer_attn is None:
+                debug["none_layer_count"] += 1
+                continue
+            if not torch.is_tensor(layer_attn):
+                continue
+            if layer_attn.ndim == 3:
+                layer_attn = layer_attn.unsqueeze(-2)
+            if layer_attn.ndim != 4:
+                continue
+            layer_tensors.append(layer_attn)
+
+        if not layer_tensors:
+            debug["no_valid_attention_tensors"] = True
+            return None, debug
+
+        debug["attn_layers"] = len(layer_tensors)
+        layers = torch.stack(layer_tensors, dim=0)  # (L, B, H, 1, S)
+        q = layers[:, :, :, -1, :].mean(dim=0).mean(dim=1)  # (B, S)
+
+        max_n = max(int(x.numel()) for x in idx_lists)
+        out = q.new_zeros((q.shape[0], max_n))
+        for b, idx in enumerate(idx_lists):
+            if idx.numel() == 0:
+                continue
+            out[b, : idx.numel()] = q[b, idx]
+        return out, debug
+
+    @torch.no_grad()
+    def _greedy_generate_with_attn_capture(
+        self,
+        inputs,
+        generate_kwargs: dict,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], dict]:
+        """Greedy decode with low-memory attention capture.
+
+        Runs a prefill forward WITHOUT attentions to build KV-cache, then decodes token-by-token.
+        For each decoded token, runs a 1-token forward with output_attentions=True and accumulates
+        attention-to-vision vectors.
+        """
+
+        debug: dict = {
+            "has_attentions": False,
+            "attn_steps": 0,
+            "attn_layers": None,
+        }
+
+        # Locate vision key positions in the prompt
+        idx_lists, vis_debug = self._locate_vision_token_indices(inputs.input_ids)
+        debug.update(vis_debug)
+
+        max_new_tokens = int(generate_kwargs.get("max_new_tokens", 16))
+        eos_token_id = generate_kwargs.get("eos_token_id", self.tokenizer.eos_token_id)
+
+        # Prefill (no attentions) to get cache + logits for first token
+        prefill = self.model(
+            **inputs,
+            use_cache=True,
+            output_attentions=False,
+            return_dict=True,
+        )
+        past = getattr(prefill, "past_key_values", None)
+        logits = prefill.logits[:, -1, :]
+        next_token = torch.argmax(logits, dim=-1)
+
+        generated = [next_token]
+        attn_sum = None
+        attn_steps = 0
+
+        # Decode remaining tokens; capture attentions for each generated token via 1-token forward.
+        for _ in range(max_new_tokens - 1):
+            out = self.model(
+                input_ids=next_token.unsqueeze(-1),
+                past_key_values=past,
+                use_cache=True,
+                output_attentions=True,
+                return_dict=True,
+            )
+            past = getattr(out, "past_key_values", past)
+            step_attn = getattr(out, "attentions", None)
+            if step_attn is not None:
+                debug["has_attentions"] = True
+                debug["attn_steps"] = debug.get("attn_steps", 0) + 1
+                step_vec, step_dbg = self._avg_attn_vec_to_vision_from_step(step_attn, idx_lists)
+                debug["none_layer_count_last"] = step_dbg.get("none_layer_count")
+                debug["no_valid_attention_tensors_last"] = step_dbg.get("no_valid_attention_tensors")
+                if debug.get("attn_layers") is None:
+                    debug["attn_layers"] = step_dbg.get("attn_layers")
+                if step_vec is not None:
+                    if attn_sum is None:
+                        attn_sum = step_vec
+                    else:
+                        attn_sum = attn_sum + step_vec
+                    attn_steps += 1
+
+            logits = out.logits[:, -1, :]
+            next_token = torch.argmax(logits, dim=-1)
+            generated.append(next_token)
+
+            if eos_token_id is not None:
+                eos = eos_token_id
+                if isinstance(eos, (list, tuple)):
+                    eos_set = set(int(x) for x in eos)
+                    if all(int(t.item()) in eos_set for t in next_token):
+                        break
+                else:
+                    if torch.all(next_token.eq(int(eos))):
+                        break
+
+        gen_tokens = torch.stack(generated, dim=1)  # (B, Tgen)
+        sequences = torch.cat([inputs.input_ids, gen_tokens], dim=1)
+
+        avg_attn = None
+        if attn_sum is not None and attn_steps > 0:
+            avg_attn = attn_sum / float(attn_steps)
+        debug["attn_steps_used"] = attn_steps
+        return sequences, avg_attn, debug
+
+    def _extract_avg_attention_to_vision_tokens(
+        self,
+        generate_output,
+        input_ids: torch.Tensor,
+        sequences: Optional[torch.Tensor] = None,
+    ) -> tuple[Optional[torch.Tensor], dict]:
+        """Return (batch, n_vision_tokens) averaged over output tokens and decoder layers.
+
+        Uses decoder self-attention weights from generated tokens (query) to
+        vision placeholder tokens in the prompt (keys).
+        """
+
+        debug: dict = {
+            "has_attentions": False,
+            "vision_locator": None,
+            "vision_token_counts": None,
+            "attn_steps": None,
+            "attn_layers": None,
+        }
+
+        attentions = getattr(generate_output, "attentions", None)
+        if attentions is None:
+            return None, debug
+
+        debug["has_attentions"] = True
+
+        config = getattr(self.model, "config", None)
+        image_token_id = getattr(config, "image_token_id", None)
+        video_token_id = getattr(config, "video_token_id", None)
+        vision_start_token_id = getattr(config, "vision_start_token_id", None)
+        vision_end_token_id = getattr(config, "vision_end_token_id", None)
+
+        idx_lists: list[torch.Tensor] = []
+        # 1) Prefer explicit image/video placeholder IDs
+        if image_token_id is not None or video_token_id is not None:
+            mask = torch.zeros_like(input_ids, dtype=torch.bool)
+            if image_token_id is not None:
+                mask |= input_ids.eq(int(image_token_id))
+            if video_token_id is not None:
+                mask |= input_ids.eq(int(video_token_id))
+            if mask.any():
+                debug["vision_locator"] = "image_token_id/video_token_id"
+                for b in range(input_ids.shape[0]):
+                    idx_lists.append(torch.nonzero(mask[b], as_tuple=False).squeeze(-1))
+        # 2) Fallback: tokens between vision_start and vision_end
+        if not idx_lists and vision_start_token_id is not None and vision_end_token_id is not None:
+            debug["vision_locator"] = "vision_start->vision_end"
+            vs = int(vision_start_token_id)
+            ve = int(vision_end_token_id)
+            for b in range(input_ids.shape[0]):
+                ids = input_ids[b]
+                starts = torch.nonzero(ids.eq(vs), as_tuple=False).squeeze(-1)
+                ends = torch.nonzero(ids.eq(ve), as_tuple=False).squeeze(-1)
+                seg_idxs = []
+                if starts.numel() and ends.numel():
+                    # Pair each start with the first subsequent end
+                    for s in starts.tolist():
+                        e_candidates = ends[ends > s]
+                        if e_candidates.numel() == 0:
+                            continue
+                        e = int(e_candidates[0].item())
+                        if e > s + 1:
+                            seg_idxs.append(torch.arange(s + 1, e, device=ids.device))
+                if seg_idxs:
+                    idx_lists.append(torch.cat(seg_idxs))
+                else:
+                    idx_lists.append(ids.new_zeros((0,), dtype=torch.long))
+
+        if not idx_lists:
+            debug["vision_locator"] = "none"
+            return None, debug
+
+        # Record vision token counts early so we can debug attention issues separately.
+        debug["vision_token_counts"] = [int(x.numel()) for x in idx_lists]
+
+        def _as_steps(attn_obj):
+            # Common formats:
+            # 1) tuple(steps) of tuple(layers) of Tensor
+            # 2) tuple(layers) of Tensor (full attention matrices)
+            if isinstance(attn_obj, (tuple, list)) and attn_obj:
+                first = attn_obj[0]
+                if torch.is_tensor(first):
+                    return [attn_obj]
+            return list(attn_obj) if isinstance(attn_obj, (tuple, list)) else [attn_obj]
+
+        steps = _as_steps(attentions)
+
+        # attentions steps: each step is iterable(layers) with tensors shaped like
+        # (B, heads, tgt_len, src_len) or sometimes (B, heads, src_len) for tgt_len==1.
+        step_avgs: list[torch.Tensor] = []
+        debug["attn_steps"] = len(steps)
+        for step_attn in steps:
+            if step_attn is None:
+                continue
+            layer_tensors = []
+            for layer_attn in (step_attn if isinstance(step_attn, (tuple, list)) else [step_attn]):
+                if layer_attn is None:
+                    continue
+                # Normalize to (B, heads, tgt_len, src_len)
+                if layer_attn.ndim == 3:
+                    layer_attn = layer_attn.unsqueeze(-2)
+                if layer_attn.ndim != 4:
+                    continue
+                layer_tensors.append(layer_attn)
+            if not layer_tensors:
+                continue
+
+            if debug["attn_layers"] is None:
+                debug["attn_layers"] = len(layer_tensors)
+
+            layers = torch.stack(layer_tensors, dim=0)  # (L, B, H, T, S)
+
+            # Choose which query tokens to average over.
+            # - For step-wise attentions: typically T==1, use -1.
+            # - For full-matrix attentions: T can be total sequence length; average
+            #   over generated positions [prompt_len:total_len).
+            prompt_len = int(input_ids.shape[1])
+            total_len = int(sequences.shape[1]) if sequences is not None and sequences.ndim == 2 else None
+            tgt_len = int(layers.shape[-2])
+            if total_len is not None and tgt_len == total_len and total_len > prompt_len:
+                q = layers[:, :, :, prompt_len:total_len, :].mean(dim=-2)  # (L, B, H, S)
+            else:
+                q = layers[:, :, :, -1, :]  # (L, B, H, S)
+
+            q = q.mean(dim=0)  # avg layers -> (B, H, S)
+            q = q.mean(dim=1)  # avg heads  -> (B, S)
+            step_avgs.append(q)
+
+        if not step_avgs:
+            debug["no_valid_attention_tensors"] = True
+            return None, debug
+
+        avg_over_steps = torch.stack(step_avgs, dim=0).mean(dim=0)  # (B, S)
+
+        # Gather only vision placeholder tokens and pad to max
+        max_n = max(int(x.numel()) for x in idx_lists)
+        out = avg_over_steps.new_zeros((input_ids.shape[0], max_n))
+        for b, idx in enumerate(idx_lists):
+            if idx.numel() == 0:
+                continue
+            out[b, : idx.numel()] = avg_over_steps[b, idx]
+        debug["vision_token_counts"] = [int(x.numel()) for x in idx_lists]
+        return out, debug
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
         res = []
@@ -401,23 +1174,51 @@ class Qwen3_VL_Experiments(lmms):
         chunks = list(re_ords.get_batched(n=self.batch_size, batch_fn=None))
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._preprocess_chunk, chunks[0]) if chunks else None
+            save_attn_env = os.environ.get("LMMS_EVAL_EXPERIMENTS_SAVE_ATTN", "0")
+            save_attn_default = save_attn_env not in ("", "0", "false", "False")
+            future = executor.submit(self._preprocess_chunk, chunks[0], save_attn_default) if chunks else None
 
             for idx in range(len(chunks)):
-                inputs, contexts, gen_kwargs, until = future.result()
+                if save_attn_default:
+                    inputs, contexts, gen_kwargs, until, rendered_prompts, video_inputs, video_metadata_list = future.result()
+                else:
+                    inputs, contexts, gen_kwargs, until = future.result()
+                    rendered_prompts, video_inputs, video_metadata_list = None, None, None
 
                 if idx + 1 < len(chunks):
-                    future = executor.submit(self._preprocess_chunk, chunks[idx + 1])
+                    future = executor.submit(self._preprocess_chunk, chunks[idx + 1], save_attn_default)
 
                 if self.device_map == "auto":
                     inputs = inputs.to("cuda")
                 else:
                     inputs = inputs.to(self.device)
 
-                generate_kwargs = self._build_generate_kwargs(gen_kwargs)
-                cont = self.model.generate(**inputs, **generate_kwargs)
+                # Optional per-request override
+                save_attn = bool(gen_kwargs.pop("save_attention", save_attn_default))
+                save_dir = gen_kwargs.pop("save_attention_dir", None) or os.environ.get(
+                    "LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR",
+                    "./experiment_artifacts/qwen3_vl_experiments",
+                )
 
-                generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
+                save_mp4_env = os.environ.get("LMMS_EVAL_EXPERIMENTS_SAVE_MP4", "0")
+                save_mp4_default = save_mp4_env not in ("", "0", "false", "False")
+                save_mp4 = bool(gen_kwargs.pop("save_mp4", save_mp4_default))
+
+                save_npz_env = os.environ.get("LMMS_EVAL_EXPERIMENTS_SAVE_NPZ", "0")
+                save_npz_default = save_npz_env not in ("", "0", "false", "False")
+                save_npz = bool(gen_kwargs.pop("save_npz", save_npz_default))
+
+                generate_kwargs = self._build_generate_kwargs(gen_kwargs)
+                avg_attn_to_vision = None
+                attn_debug = {}
+                if save_attn:
+                    # Low-memory path: no attentions during prefill; per-step attentions only.
+                    sequences, avg_attn_to_vision, attn_debug = self._greedy_generate_with_attn_capture(inputs, generate_kwargs)
+                else:
+                    cont = self.model.generate(**inputs, **generate_kwargs)
+                    sequences = cont.sequences if hasattr(cont, "sequences") else cont
+
+                generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, sequences)]
                 answers = self.processor.batch_decode(
                     generated_ids_trimmed,
                     skip_special_tokens=True,
@@ -434,6 +1235,107 @@ class Qwen3_VL_Experiments(lmms):
                     res.append(ans)
                     self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
                     pbar.update(1)
+
+                if save_attn:
+                    out_dir = Path(save_dir)
+                    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    batch_n = inputs.input_ids.shape[0]
+                    # Recover task/split/doc_id for per-sample metadata
+                    _, _, _, doc_ids, tasks, splits = zip(*chunks[idx])
+                    for b in range(batch_n):
+                        attn_vec = None
+                        if avg_attn_to_vision is not None:
+                            attn_vec = avg_attn_to_vision[b].detach().float().cpu().numpy()
+                        # Determine frame count
+                        video_frames = None
+                        fps = None
+                        if video_inputs is not None and b < len(video_inputs):
+                            video_frames = _to_uint8_video(video_inputs[b])
+                        if video_metadata_list is not None and b < len(video_metadata_list):
+                            md = video_metadata_list[b] or {}
+                            fps = md.get("fps") if isinstance(md, dict) else None
+                        num_frames = int(video_frames.shape[0]) if isinstance(video_frames, np.ndarray) and video_frames.ndim == 4 else 1
+
+                        attn_map_thw = None
+                        if attn_vec is not None:
+                            # Split attention vector into per-frame tokens if possible
+                            if num_frames > 0 and attn_vec.size % num_frames == 0:
+                                tokens_per_frame = attn_vec.size // num_frames
+                            else:
+                                num_frames = 1
+                                tokens_per_frame = attn_vec.size
+
+                            h, w = _best_factor_pair(tokens_per_frame)
+                            attn_map = attn_vec[: num_frames * tokens_per_frame].reshape(num_frames, tokens_per_frame)
+                            attn_map_thw = attn_map.reshape(num_frames, h, w)
+
+                        prompt_text = None
+                        if rendered_prompts is not None and b < len(rendered_prompts):
+                            prompt_text = rendered_prompts[b]
+
+                        task_name = tasks[b] if b < len(tasks) else None
+                        split_name = splits[b] if b < len(splits) else None
+                        doc_id = doc_ids[b] if b < len(doc_ids) else None
+                        doc = None
+                        if task_name is not None and split_name is not None and doc_id is not None:
+                            try:
+                                doc = self.task_dict[task_name][split_name][doc_id]
+                            except Exception:
+                                doc = None
+                        vsibench_score = None
+                        vsibench_score_debug = None
+                        if isinstance(doc, dict):
+                            vsibench_score, vsibench_score_debug = _compute_vsibench_accuracy(doc, answers[b] if b < len(answers) else "")
+
+                        task_type = doc.get("question_type") if isinstance(doc, dict) else None
+
+                        sample_tag = f"{now}_b{b}_chunk{idx}"
+                        metadata = {
+                            "model": "qwen3_vl_experiments",
+                            "timestamp": now,
+                            "chunk_index": idx,
+                            "batch_index": b,
+                            "task": task_name,
+                            "split": split_name,
+                            "doc_id": doc_id,
+                            "prompt_rendered": prompt_text,
+                            "prompt_context": contexts[b] if b < len(contexts) else None,
+                            "answer": answers[b] if b < len(answers) else None,
+                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) else None,
+                            "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
+                            "vsibench_accuracy": vsibench_score,
+                            "vsibench_accuracy_debug": vsibench_score_debug,
+                            "gen_kwargs": gen_kwargs,
+                            "video_fps": fps,
+                            "attn_debug": attn_debug,
+                            "attn_available": attn_map_thw is not None,
+                            "attn_frames": int(attn_map_thw.shape[0]) if attn_map_thw is not None else None,
+                            "attn_h": int(attn_map_thw.shape[1]) if attn_map_thw is not None else None,
+                            "attn_w": int(attn_map_thw.shape[2]) if attn_map_thw is not None else None,
+                        }
+                        # Save default layout
+                        _save_experiment_artifacts(
+                            out_dir,
+                            sample_tag,
+                            attn_map_thw,
+                            video_frames,
+                            metadata,
+                            save_mp4=save_mp4,
+                            save_npz=save_npz,
+                        )
+
+                        # Also save split by task type (VSIBench question_type)
+                        if task_type:
+                            out_dir_by_type = out_dir / "by_task_type" / _safe_path_component(str(task_type))
+                            _save_experiment_artifacts(
+                                out_dir_by_type,
+                                sample_tag,
+                                attn_map_thw,
+                                video_frames,
+                                metadata,
+                                save_mp4=save_mp4,
+                                save_npz=save_npz,
+                            )
 
         res = re_ords.get_original(res)
         pbar.close()
