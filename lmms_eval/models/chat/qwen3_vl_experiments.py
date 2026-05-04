@@ -16,6 +16,9 @@ from lmms_eval.models.simple.qwen3_vl_experiments import (
     Qwen3_VL_Experiments as Qwen3_VL_ExperimentsSimple,
     _best_factor_pair,
     _compute_vsibench_accuracy,
+    _find_subsequence,
+    _aggregate_token_attn_to_words,
+    _aggregate_question_attn_to_words_from_offsets,
     _safe_path_component,
     _save_experiment_artifacts,
     _to_uint8_video,
@@ -134,9 +137,23 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
 
             start_time = time.time()
             avg_attn_to_vision = None
+            avg_attn_to_question = None
             attn_debug = {}
             if save_attn:
-                sequences, avg_attn_to_vision, attn_debug = self._greedy_generate_with_attn_capture(inputs, generate_kwargs)
+                question_texts = []
+                for b in range(len(doc_id)):
+                    try:
+                        d = self.task_dict[task[b]][split[b]][doc_id[b]]
+                        question_texts.append(d.get("question", "") if isinstance(d, dict) else "")
+                    except Exception:
+                        question_texts.append("")
+
+                sequences, avg_attn_to_vision, avg_attn_to_question, attn_debug = self._greedy_generate_with_attn_capture(
+                    inputs,
+                    generate_kwargs,
+                    question_texts=question_texts,
+                    prompt_texts=texts,
+                )
             else:
                 cont = self.model.generate(**inputs, **generate_kwargs)
                 sequences = cont.sequences if hasattr(cont, "sequences") else cont
@@ -168,6 +185,9 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     attn_vec = None
                     if avg_attn_to_vision is not None:
                         attn_vec = avg_attn_to_vision[b].detach().float().cpu().numpy()
+                    q_attn_vec = None
+                    if avg_attn_to_question is not None:
+                        q_attn_vec = avg_attn_to_question[b].detach().float().cpu().numpy()
                     video_frames = None
                     fps = None
                     if video_inputs is not None and b < len(video_inputs):
@@ -198,6 +218,82 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     if isinstance(doc, dict):
                         vsibench_score, vsibench_score_debug = _compute_vsibench_accuracy(doc, answers[b] if b < len(answers) else "")
 
+                    question_text = doc.get("question") if isinstance(doc, dict) else None
+                    question_words = None
+                    question_word_attn = None
+                    if isinstance(question_text, str) and q_attn_vec is not None and q_attn_vec.size > 0:
+                        prompt = texts[b] if b < len(texts) else ""
+                        q_find = question_text
+                        start_char = prompt.find(q_find) if prompt and q_find else -1
+                        if start_char < 0 and prompt:
+                            q_find = question_text.strip()
+                            start_char = prompt.find(q_find)
+                        end_char = start_char + len(q_find) if start_char >= 0 else -1
+
+                        token_attn = q_attn_vec.astype(float).tolist()
+                        q_n = None
+                        try:
+                            if isinstance(attn_debug.get("question_token_counts"), list) and b < len(attn_debug["question_token_counts"]):
+                                q_n = int(attn_debug["question_token_counts"][b])
+                        except Exception:
+                            q_n = None
+                        if q_n is not None and q_n > 0:
+                            token_attn = token_attn[:q_n]
+
+                        tok_idxs_prompt: list[int] = []
+                        if start_char >= 0 and prompt:
+                            try:
+                                enc = self.tokenizer(
+                                    prompt,
+                                    add_special_tokens=False,
+                                    return_offsets_mapping=True,
+                                )
+                                offsets = enc.get("offset_mapping")
+                                if offsets is not None:
+                                    for i, (s, e) in enumerate(offsets):
+                                        if s is None or e is None or e <= s:
+                                            continue
+                                        if s < end_char and e > start_char:
+                                            tok_idxs_prompt.append(int(i))
+                            except Exception:
+                                tok_idxs_prompt = []
+
+                        if tok_idxs_prompt and len(tok_idxs_prompt) == len(token_attn) and start_char >= 0:
+                            question_words, question_word_attn = _aggregate_question_attn_to_words_from_offsets(
+                                tokenizer=self.tokenizer,
+                                prompt_text=prompt,
+                                question_text=question_text,
+                                question_char_span=(int(start_char), int(end_char)),
+                                question_token_indices_prompt=tok_idxs_prompt,
+                                token_attn=[float(x) for x in token_attn],
+                            )
+                        else:
+                            # Fallback: old heuristic mapping
+                            try:
+                                q_idx_lists2, _ = self._locate_question_token_indices_from_prompt(
+                                    inputs.input_ids[b : b + 1],
+                                    [question_text],
+                                    [prompt] if prompt else None,
+                                )
+                                q_idx = q_idx_lists2[0]
+                                q_token_ids = [int(x) for x in inputs.input_ids[b, q_idx].detach().cpu().tolist()] if q_idx.numel() else []
+                            except Exception:
+                                q_token_ids = []
+
+                            if q_token_ids:
+                                if len(token_attn) < len(q_token_ids):
+                                    token_attn = token_attn + [0.0] * (len(q_token_ids) - len(token_attn))
+                                token_attn = token_attn[: len(q_token_ids)]
+                            else:
+                                token_attn = []
+
+                            question_words, question_word_attn = _aggregate_token_attn_to_words(
+                                self.tokenizer,
+                                question_text,
+                                q_token_ids,
+                                token_attn,
+                            )
+
                     sample_tag = f"{now}_{task[b]}_{split[b]}_{doc_id[b]}"
                     metadata = {
                         "model": "qwen3_vl_experiments_chat",
@@ -209,6 +305,9 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         "answer": answers[b] if b < len(answers) else None,
                         "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) else None,
                         "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
+                        "question_text": question_text,
+                        "question_words": question_words,
+                        "question_word_attn": question_word_attn,
                         "vsibench_accuracy": vsibench_score,
                         "vsibench_accuracy_debug": vsibench_score_debug,
                         "gen_kwargs": gen_kwargs,

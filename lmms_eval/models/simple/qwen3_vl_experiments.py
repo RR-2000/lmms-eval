@@ -234,6 +234,257 @@ def _attention_to_binary_mask_uint8(attn_01_thw: np.ndarray, threshold: float = 
     return np.repeat(m[..., None], 3, axis=-1)
 
 
+def _find_subsequence(haystack: List[int], needle: List[int]) -> Optional[int]:
+    """Return start index of needle inside haystack, or None."""
+    if not needle or not haystack or len(needle) > len(haystack):
+        return None
+    # Simple O(n*m) search; sequences are short enough for our use.
+    n = len(needle)
+    for i in range(0, len(haystack) - n + 1):
+        if haystack[i : i + n] == needle:
+            return i
+    return None
+
+
+def _split_words(text: str) -> List[str]:
+    # Keep punctuation attached to words (matches how users read the question)
+    return re.findall(r"\S+", text or "")
+
+
+def _aggregate_token_attn_to_words(
+    tokenizer,
+    question_text: str,
+    question_token_ids: List[int],
+    token_attn: List[float],
+) -> Tuple[List[str], List[float]]:
+    """Approximate mapping from token-level attention to word-level attention.
+
+    Strategy: split question by whitespace into words; tokenize each word and
+    greedily match its token IDs inside question_token_ids.
+    """
+
+    words = _split_words(question_text)
+    if not words or not question_token_ids or not token_attn or len(question_token_ids) != len(token_attn):
+        return words, [0.0 for _ in words]
+
+    w_attn: List[float] = []
+    pos = 0
+    for w in words:
+        w_ids = tokenizer.encode(w, add_special_tokens=False)
+        if not w_ids:
+            w_attn.append(0.0)
+            continue
+        # Try to match starting at current position, else search forward.
+        start = _find_subsequence(question_token_ids[pos:], w_ids)
+        if start is None:
+            # fallback: try with stripped punctuation variants
+            w_stripped = re.sub(r"(^[^\w]+|[^\w]+$)", "", w)
+            if w_stripped and w_stripped != w:
+                w_ids2 = tokenizer.encode(w_stripped, add_special_tokens=False)
+                start = _find_subsequence(question_token_ids[pos:], w_ids2) if w_ids2 else None
+                if start is not None:
+                    w_ids = w_ids2
+        if start is None:
+            w_attn.append(0.0)
+            continue
+        start = pos + start
+        end = start + len(w_ids)
+        end = min(end, len(token_attn))
+        w_attn.append(float(sum(token_attn[start:end])))
+        pos = end
+
+    # Normalize to [0,1] for visualization
+    mx = max(w_attn) if w_attn else 0.0
+    if mx > 0:
+        w_attn = [float(x) / float(mx) for x in w_attn]
+    return words, w_attn
+
+
+def _save_question_word_attn_png(path: Path, question_text: str, words: List[str], weights_01: List[float]) -> tuple[bool, Optional[str]]:
+    """Save a word-level attention heatmap.
+
+    Each word is drawn on a colored rectangle; the rectangle color encodes attention weight.
+    Weights are (re)normalized to [0,1] inside this function.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        # Normalize weights defensively
+        ws = []
+        for a in (weights_01 or []):
+            a = float(a)
+            if not (a == a):
+                a = 0.0
+            ws.append(a)
+        if ws:
+            mn = min(ws)
+            mx = max(ws)
+            if mx > mn:
+                ws = [(x - mn) / (mx - mn) for x in ws]
+            else:
+                ws = [0.0 for _ in ws]
+        else:
+            ws = []
+
+        words = words or _split_words(question_text)
+        if len(ws) != len(words):
+            # If mismatch, pad/truncate with zeros.
+            ws = (ws + [0.0] * len(words))[: len(words)]
+
+        # Layout
+        outer_pad = 20
+        cell_pad_x = 10
+        cell_pad_y = 6
+        cell_gap = 6
+        max_w = 1400
+        bg = (255, 255, 255)
+
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            font = None
+
+        # First pass: compute wrapped layout and final height
+        dummy = Image.new("RGB", (max_w, 10), color=bg)
+        ddraw = ImageDraw.Draw(dummy)
+
+        x = outer_pad
+        y = outer_pad
+        line_h = 0
+        placements: list[tuple[str, float, int, int, int, int]] = []  # word, weight, x0, y0, x1, y1
+
+        for w, a in zip(words, ws):
+            w_txt = str(w)
+            bbox = ddraw.textbbox((0, 0), w_txt, font=font)
+            text_w = int(bbox[2] - bbox[0])
+            text_h = int(bbox[3] - bbox[1])
+            cell_w = text_w + 2 * cell_pad_x
+            cell_h = text_h + 2 * cell_pad_y
+
+            if x + cell_w > max_w - outer_pad:
+                x = outer_pad
+                y += max(line_h, cell_h) + cell_gap
+                line_h = 0
+
+            x0, y0 = x, y
+            x1, y1 = x + cell_w, y + cell_h
+            placements.append((w_txt, float(a), x0, y0, x1, y1))
+            x = x1 + cell_gap
+            line_h = max(line_h, cell_h)
+
+        used_w = 0
+        if placements:
+            used_w = max(p[4] for p in placements) + outer_pad  # x1 + right pad
+        final_w = int(max(240, min(max_w, used_w if used_w > 0 else max_w)))
+
+        final_h = y + (line_h if placements else 0) + outer_pad
+        final_h = int(max(final_h, 80))
+
+        img = Image.new("RGB", (final_w, final_h), color=bg)
+        draw = ImageDraw.Draw(img)
+
+        def _color_from_weight(t: float) -> tuple[int, int, int]:
+            # White (low) -> Red (high)
+            t = 0.0 if not (t == t) else t
+            t = max(0.0, min(1.0, float(t)))
+            g = int(255 * (1.0 - t))
+            b = int(255 * (1.0 - t))
+            return (255, g, b)
+
+        def _text_color(bg_rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+            r, g, b = bg_rgb
+            # Perceived luminance; choose black text unless bg is very dark
+            lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            return (0, 0, 0) if lum > 110 else (255, 255, 255)
+
+        for w_txt, a, x0, y0, x1, y1 in placements:
+            c = _color_from_weight(a)
+            draw.rectangle([x0, y0, x1, y1], fill=c, outline=(220, 220, 220), width=1)
+            bbox = draw.textbbox((0, 0), w_txt, font=font)
+            text_w = int(bbox[2] - bbox[0])
+            text_h = int(bbox[3] - bbox[1])
+            tx = x0 + (x1 - x0 - text_w) // 2
+            ty = y0 + (y1 - y0 - text_h) // 2
+            draw.text((tx, ty), w_txt, fill=_text_color(c), font=font)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(path)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _aggregate_question_attn_to_words_from_offsets(
+    *,
+    tokenizer,
+    prompt_text: str,
+    question_text: str,
+    question_char_span: tuple[int, int],
+    question_token_indices_prompt: List[int],
+    token_attn: List[float],
+) -> tuple[List[str], List[float]]:
+    """Aggregate token attention to words using character offsets.
+
+    This avoids brittle token-id subsequence matching (which breaks with leading-space/BPE tokens).
+    """
+
+    words = _split_words(question_text)
+    if not words or not question_text:
+        return words, [0.0 for _ in words]
+    if not question_token_indices_prompt or not token_attn or len(question_token_indices_prompt) != len(token_attn):
+        return words, [0.0 for _ in words]
+
+    q0, q1 = question_char_span
+    q0 = int(max(0, q0))
+    q1 = int(max(q0, q1))
+
+    try:
+        enc = tokenizer(
+            prompt_text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+        )
+        offsets = enc.get("offset_mapping")
+    except Exception:
+        offsets = None
+    if offsets is None:
+        return words, [0.0 for _ in words]
+
+    # Compute each word's char span within the full prompt
+    word_spans: List[tuple[int, int]] = []
+    pos = 0
+    for w in words:
+        idx = question_text.find(w, pos)
+        if idx < 0:
+            idx = question_text.find(w)
+        if idx < 0:
+            word_spans.append((q0, q0))
+            continue
+        ws = q0 + idx
+        we = q0 + idx + len(w)
+        word_spans.append((ws, we))
+        pos = idx + len(w)
+
+    w_attn = [0.0 for _ in words]
+    for idx_prompt, a in zip(question_token_indices_prompt, token_attn):
+        try:
+            s, e = offsets[int(idx_prompt)]
+        except Exception:
+            continue
+        if s is None or e is None or e <= s:
+            continue
+        if e <= q0 or s >= q1:
+            continue
+        for wi, (ws, we) in enumerate(word_spans):
+            if ws < e and we > s:
+                w_attn[wi] += float(a)
+
+    mx = max(w_attn) if w_attn else 0.0
+    if mx > 0:
+        w_attn = [float(x) / float(mx) for x in w_attn]
+    return words, w_attn
+
+
 def _normalize_attention_01(attn_map_thw: np.ndarray) -> tuple[np.ndarray, dict]:
     """Normalize attention map to [0,1] (per-clip) and return stats."""
     a = attn_map_thw.astype(np.float32)
@@ -480,6 +731,23 @@ def _save_experiment_artifacts(
     metadata["write_stacked_rollout_png_error"] = stacked_rollout_err
 
     (base.with_suffix(".json")).write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
+
+    # Question word-attention visualization
+    q_ok = None
+    q_err = None
+    q_text = metadata.get("question_text")
+    q_words = metadata.get("question_words")
+    q_attn = metadata.get("question_word_attn")
+    if isinstance(q_text, str) and isinstance(q_words, list) and isinstance(q_attn, list) and len(q_words) == len(q_attn):
+        q_ok, q_err = _save_question_word_attn_png(base.with_name(base.name + "_question_attn.png"), q_text, q_words, q_attn)
+        # update JSON with write status
+        try:
+            meta2 = dict(metadata)
+            meta2["write_question_attn_png_ok"] = q_ok
+            meta2["write_question_attn_png_error"] = q_err
+            (base.with_suffix(".json")).write_text(json.dumps(meta2, indent=2, ensure_ascii=False))
+        except Exception:
+            pass
 
 
 @register_model("qwen3_vl_experiments")
@@ -928,12 +1196,108 @@ class Qwen3_VL_Experiments(lmms):
             out[b, : idx.numel()] = q[b, idx]
         return out, debug
 
+    def _avg_attn_vec_from_step(self, step_attentions, idx_lists: list[torch.Tensor]) -> tuple[Optional[torch.Tensor], dict]:
+        """Generic gather: (B, max_n) attention-to-selected-tokens for a single step."""
+        return self._avg_attn_vec_to_vision_from_step(step_attentions, idx_lists)
+
+    def _locate_question_token_indices(self, input_ids: torch.Tensor, question_texts: List[str]) -> tuple[list[torch.Tensor], dict]:
+        return self._locate_question_token_indices_from_prompt(input_ids, question_texts, prompt_texts=None)
+
+    def _locate_question_token_indices_from_prompt(
+        self,
+        input_ids: torch.Tensor,
+        question_texts: List[str],
+        prompt_texts: Optional[List[str]],
+    ) -> tuple[list[torch.Tensor], dict]:
+        """Locate question token indices robustly.
+
+        If prompt_texts is provided and tokenizer supports offset mapping, locate the question by
+        character span inside the prompt and map to token indices.
+
+        Fallback: token-subsequence search.
+        """
+
+        debug: dict = {"question_locator": None, "question_token_counts": None}
+        idx_lists: list[torch.Tensor] = []
+
+        pad_id = getattr(self.tokenizer, "pad_token_id", None)
+        ids_cpu = input_ids.detach().cpu().tolist()
+
+        for b, q in enumerate(question_texts):
+            q = q or ""
+            prompt = (prompt_texts[b] if prompt_texts is not None and b < len(prompt_texts) else "") or ""
+
+            # Try offset-mapping path first
+            if prompt and q:
+                q_find = q
+                start_char = prompt.find(q_find)
+                if start_char < 0:
+                    q_find = q.strip()
+                    start_char = prompt.find(q_find)
+                if start_char >= 0:
+                    end_char = start_char + len(q_find)
+                    try:
+                        enc = self.tokenizer(
+                            prompt,
+                            add_special_tokens=False,
+                            return_offsets_mapping=True,
+                        )
+                        offsets = enc.get("offset_mapping")
+                        if offsets is not None:
+                            # Determine left pad length in input_ids
+                            seq = list(map(int, ids_cpu[b]))
+                            pad_len = 0
+                            if pad_id is not None:
+                                for tid in seq:
+                                    if tid == int(pad_id):
+                                        pad_len += 1
+                                    else:
+                                        break
+                            tok_idxs = []
+                            for i, (s, e) in enumerate(offsets):
+                                if s is None or e is None:
+                                    continue
+                                if e <= s:
+                                    continue
+                                if s < end_char and e > start_char:
+                                    tok_idxs.append(pad_len + int(i))
+                            if tok_idxs:
+                                idx_lists.append(torch.tensor(tok_idxs, device=input_ids.device, dtype=torch.long))
+                                continue
+                    except Exception:
+                        pass
+
+            # Fallback: token-subsequence match
+            seq = list(map(int, ids_cpu[b]))
+            variants = [q, q.strip(), "\n" + q.strip(), " " + q.strip()]
+            start = None
+            needle = None
+            for v in variants:
+                cand = self.tokenizer.encode(v, add_special_tokens=False)
+                if not cand:
+                    continue
+                s = _find_subsequence(seq, cand)
+                if s is not None:
+                    start = s
+                    needle = cand
+                    break
+            if start is None or needle is None:
+                idx_lists.append(input_ids.new_zeros((0,), dtype=torch.long))
+                continue
+            idx_lists.append(torch.arange(start, start + len(needle), device=input_ids.device))
+
+        debug["question_locator"] = "offset_mapping" if prompt_texts is not None else "token_subsequence"
+        debug["question_token_counts"] = [int(x.numel()) for x in idx_lists]
+        return idx_lists, debug
+
     @torch.no_grad()
     def _greedy_generate_with_attn_capture(
         self,
         inputs,
         generate_kwargs: dict,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], dict]:
+        question_texts: Optional[List[str]] = None,
+        prompt_texts: Optional[List[str]] = None,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], dict]:
         """Greedy decode with low-memory attention capture.
 
         Runs a prefill forward WITHOUT attentions to build KV-cache, then decodes token-by-token.
@@ -948,8 +1312,14 @@ class Qwen3_VL_Experiments(lmms):
         }
 
         # Locate vision key positions in the prompt
-        idx_lists, vis_debug = self._locate_vision_token_indices(inputs.input_ids)
+        vis_idx_lists, vis_debug = self._locate_vision_token_indices(inputs.input_ids)
         debug.update(vis_debug)
+
+        # Locate question tokens (optional)
+        q_idx_lists = None
+        if question_texts is not None:
+            q_idx_lists, q_debug = self._locate_question_token_indices_from_prompt(inputs.input_ids, question_texts, prompt_texts)
+            debug.update(q_debug)
 
         max_new_tokens = int(generate_kwargs.get("max_new_tokens", 16))
         eos_token_id = generate_kwargs.get("eos_token_id", self.tokenizer.eos_token_id)
@@ -966,7 +1336,8 @@ class Qwen3_VL_Experiments(lmms):
         next_token = torch.argmax(logits, dim=-1)
 
         generated = [next_token]
-        attn_sum = None
+        attn_sum_vis = None
+        attn_sum_q = None
         attn_steps = 0
 
         # Decode remaining tokens; capture attentions for each generated token via 1-token forward.
@@ -983,16 +1354,20 @@ class Qwen3_VL_Experiments(lmms):
             if step_attn is not None:
                 debug["has_attentions"] = True
                 debug["attn_steps"] = debug.get("attn_steps", 0) + 1
-                step_vec, step_dbg = self._avg_attn_vec_to_vision_from_step(step_attn, idx_lists)
+                step_vec, step_dbg = self._avg_attn_vec_from_step(step_attn, vis_idx_lists)
                 debug["none_layer_count_last"] = step_dbg.get("none_layer_count")
                 debug["no_valid_attention_tensors_last"] = step_dbg.get("no_valid_attention_tensors")
                 if debug.get("attn_layers") is None:
                     debug["attn_layers"] = step_dbg.get("attn_layers")
-                if step_vec is not None:
-                    if attn_sum is None:
-                        attn_sum = step_vec
-                    else:
-                        attn_sum = attn_sum + step_vec
+                step_vec_q = None
+                if q_idx_lists is not None:
+                    step_vec_q, _ = self._avg_attn_vec_from_step(step_attn, q_idx_lists)
+
+                if step_vec is not None or step_vec_q is not None:
+                    if step_vec is not None:
+                        attn_sum_vis = step_vec if attn_sum_vis is None else (attn_sum_vis + step_vec)
+                    if step_vec_q is not None:
+                        attn_sum_q = step_vec_q if attn_sum_q is None else (attn_sum_q + step_vec_q)
                     attn_steps += 1
 
             logits = out.logits[:, -1, :]
@@ -1012,11 +1387,15 @@ class Qwen3_VL_Experiments(lmms):
         gen_tokens = torch.stack(generated, dim=1)  # (B, Tgen)
         sequences = torch.cat([inputs.input_ids, gen_tokens], dim=1)
 
-        avg_attn = None
-        if attn_sum is not None and attn_steps > 0:
-            avg_attn = attn_sum / float(attn_steps)
+        avg_attn_vis = None
+        avg_attn_q = None
+        if attn_steps > 0:
+            if attn_sum_vis is not None:
+                avg_attn_vis = attn_sum_vis / float(attn_steps)
+            if attn_sum_q is not None:
+                avg_attn_q = attn_sum_q / float(attn_steps)
         debug["attn_steps_used"] = attn_steps
-        return sequences, avg_attn, debug
+        return sequences, avg_attn_vis, avg_attn_q, debug
 
     def _extract_avg_attention_to_vision_tokens(
         self,
@@ -1210,10 +1589,25 @@ class Qwen3_VL_Experiments(lmms):
 
                 generate_kwargs = self._build_generate_kwargs(gen_kwargs)
                 avg_attn_to_vision = None
+                avg_attn_to_question = None
                 attn_debug = {}
                 if save_attn:
+                    # Recover docs early to get question strings.
+                    _, _, _, doc_ids, tasks, splits = zip(*chunks[idx])
+                    question_texts = []
+                    for b in range(len(doc_ids)):
+                        try:
+                            doc = self.task_dict[tasks[b]][splits[b]][doc_ids[b]]
+                            question_texts.append(doc.get("question", "") if isinstance(doc, dict) else "")
+                        except Exception:
+                            question_texts.append("")
                     # Low-memory path: no attentions during prefill; per-step attentions only.
-                    sequences, avg_attn_to_vision, attn_debug = self._greedy_generate_with_attn_capture(inputs, generate_kwargs)
+                    sequences, avg_attn_to_vision, avg_attn_to_question, attn_debug = self._greedy_generate_with_attn_capture(
+                        inputs,
+                        generate_kwargs,
+                        question_texts=question_texts,
+                        prompt_texts=rendered_prompts,
+                    )
                 else:
                     cont = self.model.generate(**inputs, **generate_kwargs)
                     sequences = cont.sequences if hasattr(cont, "sequences") else cont
@@ -1246,6 +1640,9 @@ class Qwen3_VL_Experiments(lmms):
                         attn_vec = None
                         if avg_attn_to_vision is not None:
                             attn_vec = avg_attn_to_vision[b].detach().float().cpu().numpy()
+                        q_attn_vec = None
+                        if avg_attn_to_question is not None:
+                            q_attn_vec = avg_attn_to_question[b].detach().float().cpu().numpy()
                         # Determine frame count
                         video_frames = None
                         fps = None
@@ -1289,6 +1686,83 @@ class Qwen3_VL_Experiments(lmms):
 
                         task_type = doc.get("question_type") if isinstance(doc, dict) else None
 
+                        question_text = doc.get("question") if isinstance(doc, dict) else None
+                        question_words = None
+                        question_word_attn = None
+                        if isinstance(question_text, str) and q_attn_vec is not None and q_attn_vec.size > 0:
+                            # Prefer offset-mapping aggregation (robust to leading-space/BPE tokenization)
+                            prompt = prompt_text or ""
+                            q_find = question_text
+                            start_char = prompt.find(q_find) if prompt and q_find else -1
+                            if start_char < 0 and prompt:
+                                q_find = question_text.strip()
+                                start_char = prompt.find(q_find)
+                            end_char = start_char + len(q_find) if start_char >= 0 else -1
+
+                            token_attn = q_attn_vec.astype(float).tolist()
+                            q_n = None
+                            try:
+                                if isinstance(attn_debug.get("question_token_counts"), list) and b < len(attn_debug["question_token_counts"]):
+                                    q_n = int(attn_debug["question_token_counts"][b])
+                            except Exception:
+                                q_n = None
+                            if q_n is not None and q_n > 0:
+                                token_attn = token_attn[:q_n]
+
+                            tok_idxs_prompt: list[int] = []
+                            if start_char >= 0 and prompt:
+                                try:
+                                    enc = self.tokenizer(
+                                        prompt,
+                                        add_special_tokens=False,
+                                        return_offsets_mapping=True,
+                                    )
+                                    offsets = enc.get("offset_mapping")
+                                    if offsets is not None:
+                                        for i, (s, e) in enumerate(offsets):
+                                            if s is None or e is None or e <= s:
+                                                continue
+                                            if s < end_char and e > start_char:
+                                                tok_idxs_prompt.append(int(i))
+                                except Exception:
+                                    tok_idxs_prompt = []
+
+                            if tok_idxs_prompt and len(tok_idxs_prompt) == len(token_attn) and start_char >= 0:
+                                question_words, question_word_attn = _aggregate_question_attn_to_words_from_offsets(
+                                    tokenizer=self.tokenizer,
+                                    prompt_text=prompt,
+                                    question_text=question_text,
+                                    question_char_span=(int(start_char), int(end_char)),
+                                    question_token_indices_prompt=tok_idxs_prompt,
+                                    token_attn=[float(x) for x in token_attn],
+                                )
+                            else:
+                                # Fallback: old heuristic mapping
+                                try:
+                                    q_idx_lists2, _ = self._locate_question_token_indices_from_prompt(
+                                        inputs.input_ids[b : b + 1],
+                                        [question_text],
+                                        [prompt] if prompt else None,
+                                    )
+                                    q_idx = q_idx_lists2[0]
+                                    q_token_ids = [int(x) for x in inputs.input_ids[b, q_idx].detach().cpu().tolist()] if q_idx.numel() else []
+                                except Exception:
+                                    q_token_ids = []
+
+                                if q_token_ids:
+                                    if len(token_attn) < len(q_token_ids):
+                                        token_attn = token_attn + [0.0] * (len(q_token_ids) - len(token_attn))
+                                    token_attn = token_attn[: len(q_token_ids)]
+                                else:
+                                    token_attn = []
+
+                                question_words, question_word_attn = _aggregate_token_attn_to_words(
+                                    self.tokenizer,
+                                    question_text,
+                                    q_token_ids,
+                                    token_attn,
+                                )
+
                         sample_tag = f"{now}_b{b}_chunk{idx}"
                         metadata = {
                             "model": "qwen3_vl_experiments",
@@ -1303,6 +1777,9 @@ class Qwen3_VL_Experiments(lmms):
                             "answer": answers[b] if b < len(answers) else None,
                             "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) else None,
                             "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
+                            "question_text": question_text,
+                            "question_words": question_words,
+                            "question_word_attn": question_word_attn,
                             "vsibench_accuracy": vsibench_score,
                             "vsibench_accuracy_debug": vsibench_score_debug,
                             "gen_kwargs": gen_kwargs,
