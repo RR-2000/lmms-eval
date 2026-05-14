@@ -39,6 +39,7 @@ temp/
 outputs/
 output/
 experiment_artifacts/
+experiment_artifacts*/
 
 # Logs
 logs/

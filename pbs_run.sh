@@ -1,25 +1,25 @@
 #!/bin/bash
-#PBS -N lmms-vsi
-#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:host=cvml01
+#PBS -N lmms-order
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:host=cvml05
 
 # Activate the Conda environment
-# source /apps/miniconda3/etc/profile.d/conda.sh
-source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+source /apps/miniconda3/etc/profile.d/conda.sh
+# source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 cd /home/ramanathan/VLM/lmms-eval
 
 conda activate lmms
 
 # LMMS_EVAL_EXPERIMENTS_SAVE_MP4=1
 # LMMS_EVAL_EXPERIMENTS_SAVE_NPZ=1
-LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 python -m lmms_eval \
+LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_VSI_order/qwen3_vl_experiments LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 python -m lmms_eval \
   --model qwen3_vl_experiments \
-  --model_args pretrained=Qwen/Qwen3-VL-2B-Instruct,max_num_frames=16 \
-  --tasks vsibench_debiased \
+  --model_args pretrained=Qwen/Qwen3-VL-2B-Instruct,max_num_frames=32 \
+  --tasks vsibench_object_appearance_order \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/vsibench 
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/VSI_order
 
-
+# vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench
 # How to enable
 
 # Set LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1

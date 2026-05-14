@@ -1,0 +1,8 @@
+dataset_name: object_abs_distance
+test_split: test
+task: "vsibench_object_abs_distance"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: _default_template_yaml

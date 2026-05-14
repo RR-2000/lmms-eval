@@ -1,0 +1,8 @@
+dataset_name: room_size_estimation
+test_split: test
+task: "vsibench_room_size_estimation"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: _default_template_yaml

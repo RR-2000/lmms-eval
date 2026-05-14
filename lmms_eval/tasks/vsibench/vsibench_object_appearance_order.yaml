@@ -1,0 +1,8 @@
+dataset_name: object_appearance_order
+test_split: test
+task: "vsibench_object_appearance_order"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: _default_template_yaml
