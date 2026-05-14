@@ -1,6 +1,7 @@
 import re
 import os
 import json
+import io
 from datetime import datetime
 from pathlib import Path
 import shutil
@@ -95,6 +96,85 @@ def _to_uint8_video(frames) -> Optional[np.ndarray]:
             arr_f = arr_f * 255.0
         arr = np.clip(arr_f, 0.0, 255.0).astype(np.uint8)
     return arr
+
+
+def _images_to_uint8_video(images) -> Optional[np.ndarray]:
+    if images is None:
+        return None
+    # images may be a list (possibly nested) of PIL Images/arrays or a tensor
+    if torch.is_tensor(images):
+        arr = images.detach().cpu().numpy()
+        if arr.ndim == 3:
+            arr = arr[None, ...]
+        return _to_uint8_video(arr)
+
+    if isinstance(images, (list, tuple)):
+        # Flatten nested lists/tuples
+        def _flatten(seq):
+            out = []
+            for item in seq:
+                if isinstance(item, (list, tuple)):
+                    out.extend(_flatten(item))
+                else:
+                    out.append(item)
+            return out
+
+        flat = _flatten(images)
+        frames = []
+        for im in flat:
+            if im is None:
+                continue
+            if torch.is_tensor(im):
+                arr = im.detach().cpu().numpy()
+            else:
+                arr = np.asarray(im)
+            if arr.ndim == 2:
+                arr = np.stack([arr] * 3, axis=-1)
+            if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):
+                arr = np.transpose(arr, (1, 2, 0))
+            frames.append(arr)
+        if not frames:
+            return None
+        try:
+            stacked = np.stack(frames, axis=0)
+        except Exception:
+            return None
+        return _to_uint8_video(stacked)
+
+    return None
+
+
+def _doc_images_to_uint8_video(doc: Optional[dict]) -> Optional[np.ndarray]:
+    if not isinstance(doc, dict):
+        return None
+    images = doc.get("images")
+    single = doc.get("image")
+    if isinstance(images, (list, tuple)):
+        iter_images = list(images)
+    elif single is not None:
+        iter_images = [single]
+    else:
+        return None
+
+    frames = []
+    for im in iter_images:
+        if im is None:
+            continue
+        if isinstance(im, Image.Image):
+            arr = np.asarray(im.convert("RGB"))
+        else:
+            try:
+                arr = np.asarray(Image.open(io.BytesIO(im)).convert("RGB"))
+            except Exception:
+                continue
+        frames.append(arr)
+    if not frames:
+        return None
+    try:
+        stacked = np.stack(frames, axis=0)
+    except Exception:
+        return None
+    return _to_uint8_video(stacked)
 
 
 def _ensure_uint8_rgb(frames_uint8: np.ndarray) -> np.ndarray:
@@ -227,13 +307,6 @@ def _normalize_to_uint8_heatmap(attn: np.ndarray) -> np.ndarray:
     return np.repeat(a[..., None], 3, axis=-1)
 
 
-def _attention_to_binary_mask_uint8(attn_01_thw: np.ndarray, threshold: float = 0.5) -> np.ndarray:
-    """Convert normalized attention in [0,1] to a binary RGB mask video (uint8)."""
-    a = np.nan_to_num(attn_01_thw.astype(np.float32), nan=0.0, posinf=1.0, neginf=0.0)
-    m = (a >= float(threshold)).astype(np.uint8) * 255
-    return np.repeat(m[..., None], 3, axis=-1)
-
-
 def _find_subsequence(haystack: List[int], needle: List[int]) -> Optional[int]:
     """Return start index of needle inside haystack, or None."""
     if not needle or not haystack or len(needle) > len(haystack):
@@ -249,6 +322,19 @@ def _find_subsequence(haystack: List[int], needle: List[int]) -> Optional[int]:
 def _split_words(text: str) -> List[str]:
     # Keep punctuation attached to words (matches how users read the question)
     return re.findall(r"\S+", text or "")
+
+
+def _extract_options_from_prompt(prompt_text: Optional[str]) -> List[str]:
+    """Extract MCA option lines (e.g., 'A. ...') from a rendered prompt."""
+    if not isinstance(prompt_text, str) or not prompt_text:
+        return []
+    options: List[str] = []
+    for line in prompt_text.splitlines():
+        s = line.strip()
+        if re.match(r"^[A-D][\.)]\s+\S+", s):
+            options.append(s)
+    # Keep only first 4 to avoid odd prompts.
+    return options[:4]
 
 
 def _aggregate_token_attn_to_words(
@@ -485,6 +571,67 @@ def _aggregate_question_attn_to_words_from_offsets(
     return words, w_attn
 
 
+def _save_options_word_attn_png(
+    path: Path,
+    option_texts: List[str],
+    option_words: List[List[str]],
+    option_weights: List[List[float]],
+) -> tuple[bool, Optional[str]]:
+    """Save an options heatmap PNG by stacking per-option word heatmaps."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        if not option_texts or not option_words or not option_weights:
+            return False, "no options"
+        if not (len(option_texts) == len(option_words) == len(option_weights)):
+            return False, "options length mismatch"
+
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            font = None
+
+        # Render each option line using the same word-heatmap logic as question
+        rendered: List[Image.Image] = []
+        gap_y = 12
+        pad = 16
+
+        for opt_text, words, weights in zip(option_texts, option_words, option_weights):
+            # Reuse the question renderer by drawing into a temp file-like canvas
+            # (call the same function but capture its output by re-implementing small wrapper)
+            tmp_path = path.parent / (path.name + ".__tmp__.png")
+            ok, err = _save_question_word_attn_png(tmp_path, opt_text, words, weights)
+            if not ok:
+                return False, err
+            with Image.open(tmp_path) as im:
+                img = im.convert("RGB")
+            try:
+                tmp_path.unlink(missing_ok=True)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            # Add a small label bar above each option
+            label_h = 22
+            labeled = Image.new("RGB", (max(img.width, 240), img.height + label_h), color=(255, 255, 255))
+            d = ImageDraw.Draw(labeled)
+            d.text((pad, 2), str(opt_text)[:90], fill=(30, 30, 30), font=font)
+            labeled.paste(img, (0, label_h))
+            rendered.append(labeled)
+
+        out_w = max(r.width for r in rendered) + 2 * pad
+        out_h = sum(r.height for r in rendered) + gap_y * (len(rendered) - 1) + 2 * pad
+        canvas = Image.new("RGB", (out_w, out_h), color=(255, 255, 255))
+        y = pad
+        for r in rendered:
+            canvas.paste(r, (pad, y))
+            y += r.height + gap_y
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(path)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _normalize_attention_01(attn_map_thw: np.ndarray) -> tuple[np.ndarray, dict]:
     """Normalize attention map to [0,1] (per-clip) and return stats."""
     a = attn_map_thw.astype(np.float32)
@@ -504,6 +651,31 @@ def _resize_attn_to_frame(attn_hw01: np.ndarray, out_h: int, out_w: int) -> np.n
 
     return cv2.resize(attn_hw01.astype(np.float32), (out_w, out_h), interpolation=cv2.INTER_LINEAR)
 
+
+def _overlay_attention(video_uint8_thwc: np.ndarray, attn_01_thw: np.ndarray, strength: float = 0.85) -> np.ndarray:
+    """Overlay a heatmap where attention is high.
+
+    Output = (1-a)*orig + a*heat, where a = strength * attn.
+    """
+    rgb = _ensure_uint8_rgb(video_uint8_thwc)
+    t, h, w, _ = rgb.shape
+    out = np.empty_like(rgb)
+
+    def _jet_colormap(x: np.ndarray) -> np.ndarray:
+        # Approximate MATLAB jet: blue -> cyan -> yellow -> red
+        x = np.clip(x, 0.0, 1.0)
+        r = np.clip(1.5 - np.abs(4.0 * x - 3.0), 0.0, 1.0)
+        g = np.clip(1.5 - np.abs(4.0 * x - 2.0), 0.0, 1.0)
+        b = np.clip(1.5 - np.abs(4.0 * x - 1.0), 0.0, 1.0)
+        return np.stack([r, g, b], axis=-1) * 255.0
+
+    for i in range(t):
+        a = attn_01_thw[min(i, attn_01_thw.shape[0] - 1)]
+        a_big = _resize_attn_to_frame(a, h, w)
+        alpha = (strength * a_big).clip(0.0, 1.0)[..., None]
+        heat = _jet_colormap(a_big)
+        out[i] = ((1.0 - alpha) * rgb[i].astype(np.float32) + alpha * heat).clip(0, 255).astype(np.uint8)
+    return out
 
 def _overlay_attention_red(video_uint8_thwc: np.ndarray, attn_01_thw: np.ndarray, strength: float = 0.85) -> np.ndarray:
     """Overlay red where attention is high.
@@ -670,12 +842,10 @@ def _save_experiment_artifacts(
     masked_rollout_err = None
     mask_rollout_ok = None
     mask_rollout_err = None
-    mask_bin_rollout_ok = None
-    mask_bin_rollout_err = None
     stacked_rollout_ok = None
     stacked_rollout_err = None
     if video_uint8 is not None and attn_norm_01 is not None:
-        overlay = _overlay_attention_red(video_uint8, attn_norm_01)
+        overlay = _overlay_attention(video_uint8, attn_norm_01)
         if save_mp4:
             masked_ok, masked_err = _try_write_mp4(base.with_name(base.name + "_masked.mp4"), overlay, fps=metadata.get("video_fps"))
         masked_rollout_ok, masked_rollout_err = _save_rollout_png(base.with_name(base.name + "_masked_rollout.png"), overlay)
@@ -684,11 +854,7 @@ def _save_experiment_artifacts(
         heat = _normalize_to_uint8_heatmap(attn_norm_01)
         mask_rollout_ok, mask_rollout_err = _save_rollout_png(base.with_name(base.name + "_mask_rollout.png"), heat)
 
-        # Binary mask derived from normalized attention
-        mask_bin = _attention_to_binary_mask_uint8(attn_norm_01, threshold=0.5)
-        mask_bin_rollout_ok, mask_bin_rollout_err = _save_rollout_png(base.with_name(base.name + "_mask_bin_rollout.png"), mask_bin)
-
-        # Vertical stack of rollouts: (original, heatmask, binary mask, masked)
+        # Vertical stack of rollouts: (original, heatmask, masked)
         def _rollout_array(frames_thwc: np.ndarray) -> np.ndarray:
             frames = _ensure_uint8_rgb(frames_thwc)
             t, h, w, _ = frames.shape
@@ -699,11 +865,10 @@ def _save_experiment_artifacts(
 
         orig_roll = _rollout_array(video_uint8)
         mask_roll = _rollout_array(heat)
-        mask_bin_roll = _rollout_array(mask_bin)
         masked_roll = _rollout_array(overlay)
         stacked_rollout_ok, stacked_rollout_err = _save_vertical_stack_png(
             base.with_name(base.name + "_stacked_rollout.png"),
-            [orig_roll, mask_roll, mask_bin_roll, masked_roll],
+            [orig_roll, mask_roll, masked_roll],
         )
 
     metadata = dict(metadata)
@@ -725,8 +890,6 @@ def _save_experiment_artifacts(
     metadata["write_masked_rollout_png_error"] = masked_rollout_err
     metadata["write_mask_rollout_png_ok"] = mask_rollout_ok
     metadata["write_mask_rollout_png_error"] = mask_rollout_err
-    metadata["write_mask_bin_rollout_png_ok"] = mask_bin_rollout_ok
-    metadata["write_mask_bin_rollout_png_error"] = mask_bin_rollout_err
     metadata["write_stacked_rollout_png_ok"] = stacked_rollout_ok
     metadata["write_stacked_rollout_png_error"] = stacked_rollout_err
 
@@ -748,6 +911,42 @@ def _save_experiment_artifacts(
             (base.with_suffix(".json")).write_text(json.dumps(meta2, indent=2, ensure_ascii=False))
         except Exception:
             pass
+
+    # Options word-attention visualization (MCA prompts)
+    opt_ok = None
+    opt_err = None
+    opt_texts = metadata.get("options_texts")
+    opt_words = metadata.get("option_words")
+    opt_attn = metadata.get("option_word_attn")
+    if (
+        isinstance(opt_texts, list)
+        and isinstance(opt_words, list)
+        and isinstance(opt_attn, list)
+        and len(opt_texts) == len(opt_words) == len(opt_attn)
+    ):
+        # Validate each option
+        ok_shape = True
+        for w, a in zip(opt_words, opt_attn):
+            if not (isinstance(w, list) and isinstance(a, list) and len(w) == len(a)):
+                ok_shape = False
+                break
+        if ok_shape and len(opt_texts) > 0:
+            opt_ok, opt_err = _save_options_word_attn_png(
+                base.with_name(base.name + "_options_attn.png"),
+                [str(x) for x in opt_texts],
+                opt_words,
+                opt_attn,
+            )
+            try:
+                meta3 = json.loads((base.with_suffix(".json")).read_text())
+            except Exception:
+                meta3 = dict(metadata)
+            try:
+                meta3["write_options_attn_png_ok"] = opt_ok
+                meta3["write_options_attn_png_error"] = opt_err
+                (base.with_suffix(".json")).write_text(json.dumps(meta3, indent=2, ensure_ascii=False))
+            except Exception:
+                pass
 
 
 @register_model("qwen3_vl_experiments")
@@ -1098,7 +1297,7 @@ class Qwen3_VL_Experiments(lmms):
             )
 
         if return_media:
-            return inputs, contexts, gen_kwargs, until, texts, video_inputs, video_metadata_list
+            return inputs, contexts, gen_kwargs, until, texts, image_inputs, video_inputs, video_metadata_list
         return inputs, contexts, gen_kwargs, until
 
     def _locate_vision_token_indices(self, input_ids: torch.Tensor) -> tuple[list[torch.Tensor], dict]:
@@ -1290,6 +1489,90 @@ class Qwen3_VL_Experiments(lmms):
         debug["question_token_counts"] = [int(x.numel()) for x in idx_lists]
         return idx_lists, debug
 
+    def _locate_option_token_indices_from_prompt(
+        self,
+        input_ids: torch.Tensor,
+        prompt_texts: Optional[List[str]],
+        option_texts_per_sample: Optional[List[List[str]]],
+        max_options: int = 4,
+    ) -> tuple[list[list[torch.Tensor]], dict]:
+        """Return token indices for each option line.
+
+        Output: idx_lists_per_option[opt_i][b] = 1D token indices in input_ids.
+        """
+        debug: dict = {"option_locator": None, "option_token_counts": None}
+        bsz = int(input_ids.shape[0])
+        pad_id = getattr(self.tokenizer, "pad_token_id", None)
+        ids_cpu = input_ids.detach().cpu().tolist()
+
+        empty = input_ids.new_zeros((0,), dtype=torch.long)
+        idx_lists_per_option: list[list[torch.Tensor]] = [[empty for _ in range(bsz)] for _ in range(max_options)]
+
+        if prompt_texts is None or option_texts_per_sample is None:
+            debug["option_locator"] = "none"
+            debug["option_token_counts"] = [[0 for _ in range(max_options)] for _ in range(bsz)]
+            return idx_lists_per_option, debug
+
+        counts: list[list[int]] = [[0 for _ in range(max_options)] for _ in range(bsz)]
+        for b in range(bsz):
+            prompt = prompt_texts[b] if b < len(prompt_texts) else ""
+            opts = option_texts_per_sample[b] if b < len(option_texts_per_sample) else []
+            if not isinstance(prompt, str) or not prompt:
+                continue
+
+            # Determine left pad length in input_ids
+            seq = list(map(int, ids_cpu[b]))
+            pad_len = 0
+            if pad_id is not None:
+                for tid in seq:
+                    if tid == int(pad_id):
+                        pad_len += 1
+                    else:
+                        break
+
+            try:
+                enc = self.tokenizer(
+                    prompt,
+                    add_special_tokens=False,
+                    return_offsets_mapping=True,
+                )
+                offsets = enc.get("offset_mapping")
+            except Exception:
+                offsets = None
+
+            if offsets is None:
+                continue
+
+            for oi in range(min(max_options, len(opts))):
+                opt = opts[oi]
+                if not isinstance(opt, str) or not opt:
+                    continue
+                start_char = prompt.find(opt)
+                if start_char < 0:
+                    opt2 = re.sub(r"\s+", " ", opt).strip()
+                    prompt2 = re.sub(r"\s+", " ", prompt)
+                    start_char = prompt2.find(opt2)
+                    # Can't safely map back to original offsets if we changed text.
+                    if start_char < 0:
+                        continue
+                    # Give up in this rare case.
+                    continue
+                end_char = start_char + len(opt)
+
+                tok_idxs = []
+                for i, (s, e) in enumerate(offsets):
+                    if s is None or e is None or e <= s:
+                        continue
+                    if s < end_char and e > start_char:
+                        tok_idxs.append(pad_len + int(i))
+                if tok_idxs:
+                    idx_lists_per_option[oi][b] = torch.tensor(tok_idxs, device=input_ids.device, dtype=torch.long)
+                    counts[b][oi] = int(len(tok_idxs))
+
+        debug["option_locator"] = "offset_mapping"
+        debug["option_token_counts"] = counts
+        return idx_lists_per_option, debug
+
     @torch.no_grad()
     def _greedy_generate_with_attn_capture(
         self,
@@ -1297,7 +1580,8 @@ class Qwen3_VL_Experiments(lmms):
         generate_kwargs: dict,
         question_texts: Optional[List[str]] = None,
         prompt_texts: Optional[List[str]] = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], dict]:
+        option_texts_per_sample: Optional[List[List[str]]] = None,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[List[Optional[torch.Tensor]]], dict]:
         """Greedy decode with low-memory attention capture.
 
         Runs a prefill forward WITHOUT attentions to build KV-cache, then decodes token-by-token.
@@ -1321,6 +1605,17 @@ class Qwen3_VL_Experiments(lmms):
             q_idx_lists, q_debug = self._locate_question_token_indices_from_prompt(inputs.input_ids, question_texts, prompt_texts)
             debug.update(q_debug)
 
+        # Locate option tokens (optional)
+        opt_idx_lists_per_option = None
+        if option_texts_per_sample is not None:
+            opt_idx_lists_per_option, opt_debug = self._locate_option_token_indices_from_prompt(
+                inputs.input_ids,
+                prompt_texts,
+                option_texts_per_sample,
+                max_options=4,
+            )
+            debug.update(opt_debug)
+
         max_new_tokens = int(generate_kwargs.get("max_new_tokens", 16))
         eos_token_id = generate_kwargs.get("eos_token_id", self.tokenizer.eos_token_id)
 
@@ -1338,6 +1633,7 @@ class Qwen3_VL_Experiments(lmms):
         generated = [next_token]
         attn_sum_vis = None
         attn_sum_q = None
+        attn_sum_opts: Optional[List[Optional[torch.Tensor]]] = None
         attn_steps = 0
 
         # Decode remaining tokens; capture attentions for each generated token via 1-token forward.
@@ -1363,11 +1659,25 @@ class Qwen3_VL_Experiments(lmms):
                 if q_idx_lists is not None:
                     step_vec_q, _ = self._avg_attn_vec_from_step(step_attn, q_idx_lists)
 
-                if step_vec is not None or step_vec_q is not None:
+                step_vec_opts: Optional[List[Optional[torch.Tensor]]] = None
+                if opt_idx_lists_per_option is not None:
+                    step_vec_opts = []
+                    for idx_lists_opt in opt_idx_lists_per_option:
+                        vopt, _ = self._avg_attn_vec_from_step(step_attn, idx_lists_opt)
+                        step_vec_opts.append(vopt)
+
+                if step_vec is not None or step_vec_q is not None or (step_vec_opts is not None and any(v is not None for v in step_vec_opts)):
                     if step_vec is not None:
                         attn_sum_vis = step_vec if attn_sum_vis is None else (attn_sum_vis + step_vec)
                     if step_vec_q is not None:
                         attn_sum_q = step_vec_q if attn_sum_q is None else (attn_sum_q + step_vec_q)
+                    if step_vec_opts is not None:
+                        if attn_sum_opts is None:
+                            attn_sum_opts = [None for _ in range(len(step_vec_opts))]
+                        for iopt, vopt in enumerate(step_vec_opts):
+                            if vopt is None:
+                                continue
+                            attn_sum_opts[iopt] = vopt if attn_sum_opts[iopt] is None else (attn_sum_opts[iopt] + vopt)
                     attn_steps += 1
 
             logits = out.logits[:, -1, :]
@@ -1389,13 +1699,18 @@ class Qwen3_VL_Experiments(lmms):
 
         avg_attn_vis = None
         avg_attn_q = None
+        avg_attn_opts: Optional[List[Optional[torch.Tensor]]] = None
         if attn_steps > 0:
             if attn_sum_vis is not None:
                 avg_attn_vis = attn_sum_vis / float(attn_steps)
             if attn_sum_q is not None:
                 avg_attn_q = attn_sum_q / float(attn_steps)
+            if attn_sum_opts is not None:
+                avg_attn_opts = []
+                for vopt in attn_sum_opts:
+                    avg_attn_opts.append((vopt / float(attn_steps)) if vopt is not None else None)
         debug["attn_steps_used"] = attn_steps
-        return sequences, avg_attn_vis, avg_attn_q, debug
+        return sequences, avg_attn_vis, avg_attn_q, avg_attn_opts, debug
 
     def _extract_avg_attention_to_vision_tokens(
         self,
@@ -1559,10 +1874,10 @@ class Qwen3_VL_Experiments(lmms):
 
             for idx in range(len(chunks)):
                 if save_attn_default:
-                    inputs, contexts, gen_kwargs, until, rendered_prompts, video_inputs, video_metadata_list = future.result()
+                    inputs, contexts, gen_kwargs, until, rendered_prompts, image_inputs, video_inputs, video_metadata_list = future.result()
                 else:
                     inputs, contexts, gen_kwargs, until = future.result()
-                    rendered_prompts, video_inputs, video_metadata_list = None, None, None
+                    rendered_prompts, image_inputs, video_inputs, video_metadata_list = None, None, None, None
 
                 if idx + 1 < len(chunks):
                     future = executor.submit(self._preprocess_chunk, chunks[idx + 1], save_attn_default)
@@ -1590,23 +1905,35 @@ class Qwen3_VL_Experiments(lmms):
                 generate_kwargs = self._build_generate_kwargs(gen_kwargs)
                 avg_attn_to_vision = None
                 avg_attn_to_question = None
+                avg_attn_to_options = None
                 attn_debug = {}
                 if save_attn:
                     # Recover docs early to get question strings.
                     _, _, _, doc_ids, tasks, splits = zip(*chunks[idx])
                     question_texts = []
+                    option_texts_per_sample = []
                     for b in range(len(doc_ids)):
                         try:
                             doc = self.task_dict[tasks[b]][splits[b]][doc_ids[b]]
                             question_texts.append(doc.get("question", "") if isinstance(doc, dict) else "")
                         except Exception:
                             question_texts.append("")
+                        # Prefer extracting options from the actually-rendered prompt
+                        if rendered_prompts is not None and b < len(rendered_prompts):
+                            option_texts_per_sample.append(_extract_options_from_prompt(rendered_prompts[b]))
+                        else:
+                            try:
+                                doc = self.task_dict[tasks[b]][splits[b]][doc_ids[b]]
+                                option_texts_per_sample.append(list(doc.get("options", []) or []) if isinstance(doc, dict) else [])
+                            except Exception:
+                                option_texts_per_sample.append([])
                     # Low-memory path: no attentions during prefill; per-step attentions only.
-                    sequences, avg_attn_to_vision, avg_attn_to_question, attn_debug = self._greedy_generate_with_attn_capture(
+                    sequences, avg_attn_to_vision, avg_attn_to_question, avg_attn_to_options, attn_debug = self._greedy_generate_with_attn_capture(
                         inputs,
                         generate_kwargs,
                         question_texts=question_texts,
                         prompt_texts=rendered_prompts,
+                        option_texts_per_sample=option_texts_per_sample,
                     )
                 else:
                     cont = self.model.generate(**inputs, **generate_kwargs)
@@ -1637,39 +1964,6 @@ class Qwen3_VL_Experiments(lmms):
                     # Recover task/split/doc_id for per-sample metadata
                     _, _, _, doc_ids, tasks, splits = zip(*chunks[idx])
                     for b in range(batch_n):
-                        attn_vec = None
-                        if avg_attn_to_vision is not None:
-                            attn_vec = avg_attn_to_vision[b].detach().float().cpu().numpy()
-                        q_attn_vec = None
-                        if avg_attn_to_question is not None:
-                            q_attn_vec = avg_attn_to_question[b].detach().float().cpu().numpy()
-                        # Determine frame count
-                        video_frames = None
-                        fps = None
-                        if video_inputs is not None and b < len(video_inputs):
-                            video_frames = _to_uint8_video(video_inputs[b])
-                        if video_metadata_list is not None and b < len(video_metadata_list):
-                            md = video_metadata_list[b] or {}
-                            fps = md.get("fps") if isinstance(md, dict) else None
-                        num_frames = int(video_frames.shape[0]) if isinstance(video_frames, np.ndarray) and video_frames.ndim == 4 else 1
-
-                        attn_map_thw = None
-                        if attn_vec is not None:
-                            # Split attention vector into per-frame tokens if possible
-                            if num_frames > 0 and attn_vec.size % num_frames == 0:
-                                tokens_per_frame = attn_vec.size // num_frames
-                            else:
-                                num_frames = 1
-                                tokens_per_frame = attn_vec.size
-
-                            h, w = _best_factor_pair(tokens_per_frame)
-                            attn_map = attn_vec[: num_frames * tokens_per_frame].reshape(num_frames, tokens_per_frame)
-                            attn_map_thw = attn_map.reshape(num_frames, h, w)
-
-                        prompt_text = None
-                        if rendered_prompts is not None and b < len(rendered_prompts):
-                            prompt_text = rendered_prompts[b]
-
                         task_name = tasks[b] if b < len(tasks) else None
                         split_name = splits[b] if b < len(splits) else None
                         doc_id = doc_ids[b] if b < len(doc_ids) else None
@@ -1679,6 +1973,100 @@ class Qwen3_VL_Experiments(lmms):
                                 doc = self.task_dict[task_name][split_name][doc_id]
                             except Exception:
                                 doc = None
+
+                        attn_vec = None
+                        if avg_attn_to_vision is not None:
+                            attn_vec = avg_attn_to_vision[b].detach().float().cpu().numpy()
+                        q_attn_vec = None
+                        if avg_attn_to_question is not None:
+                            q_attn_vec = avg_attn_to_question[b].detach().float().cpu().numpy()
+
+                        opt_attn_vecs = None
+                        if avg_attn_to_options is not None:
+                            opt_attn_vecs = []
+                            for vopt in avg_attn_to_options:
+                                if vopt is None:
+                                    opt_attn_vecs.append(None)
+                                else:
+                                    opt_attn_vecs.append(vopt[b].detach().float().cpu().numpy())
+                        # Determine frame count
+                        video_frames = None
+                        fps = None
+                        if video_inputs is not None and b < len(video_inputs):
+                            video_frames = _to_uint8_video(video_inputs[b])
+                        if video_frames is None and image_inputs is not None and b < len(image_inputs):
+                            video_frames = _images_to_uint8_video(image_inputs[b])
+                        if video_frames is None:
+                            video_frames = _doc_images_to_uint8_video(doc)
+                        if video_metadata_list is not None and b < len(video_metadata_list):
+                            md = video_metadata_list[b] or {}
+                            fps = md.get("fps") if isinstance(md, dict) else None
+                        num_frames = int(video_frames.shape[0]) if isinstance(video_frames, np.ndarray) and video_frames.ndim == 4 else 1
+
+                        attn_map_thw = None
+                        if attn_vec is not None:
+                            # Prefer model-provided grid metadata when available.
+                            grid_src = None
+                            grid_thw = None
+                            grid_merge = 1
+                            try:
+                                vision_cfg = getattr(getattr(self.model, "config", None), "vision_config", None)
+                                grid_merge = int(getattr(vision_cfg, "spatial_merge_size", 1)) if vision_cfg is not None else 1
+                            except Exception:
+                                grid_merge = 1
+
+                            image_grid_thw = None
+                            video_grid_thw = None
+                            try:
+                                image_grid_thw = inputs.get("image_grid_thw")
+                            except Exception:
+                                image_grid_thw = getattr(inputs, "image_grid_thw", None)
+                            try:
+                                video_grid_thw = inputs.get("video_grid_thw")
+                            except Exception:
+                                video_grid_thw = getattr(inputs, "video_grid_thw", None)
+
+                            if image_grid_thw is not None and torch.is_tensor(image_grid_thw):
+                                if image_grid_thw.ndim == 2 and int(image_grid_thw.shape[0]) == int(batch_n):
+                                    grid_src = "image_grid_thw"
+                                    grid_thw = image_grid_thw[b].detach().cpu().tolist()
+                            if grid_thw is None and video_grid_thw is not None and torch.is_tensor(video_grid_thw):
+                                if video_grid_thw.ndim == 2 and int(video_grid_thw.shape[0]) == int(batch_n):
+                                    grid_src = "video_grid_thw"
+                                    grid_thw = video_grid_thw[b].detach().cpu().tolist()
+
+                            if grid_thw is not None and len(grid_thw) == 3:
+                                gt, gh, gw = [int(x) for x in grid_thw]
+                                ghm = max(1, gh // max(1, grid_merge))
+                                gwm = max(1, gw // max(1, grid_merge))
+                                expected = max(1, gt) * ghm * gwm
+                                if expected > 0 and int(attn_vec.size) == int(expected):
+                                    attn_map = attn_vec.reshape(max(1, gt), ghm, gwm)
+                                    attn_map_thw = attn_map
+                                else:
+                                    grid_src = None
+
+                            if grid_src is None:
+                                # Split attention vector into per-frame tokens if possible (heuristic).
+                                if num_frames > 0 and attn_vec.size % num_frames == 0:
+                                    tokens_per_frame = attn_vec.size // num_frames
+                                else:
+                                    num_frames = 1
+                                    tokens_per_frame = attn_vec.size
+
+                                h, w = _best_factor_pair(tokens_per_frame)
+                                attn_map = attn_vec[: num_frames * tokens_per_frame].reshape(num_frames, tokens_per_frame)
+                                attn_map_thw = attn_map.reshape(num_frames, h, w)
+
+                            if isinstance(attn_debug, dict):
+                                attn_debug["attn_grid_source"] = grid_src or "heuristic"
+                                attn_debug["attn_grid_thw"] = grid_thw
+                                attn_debug["attn_grid_merge"] = int(grid_merge)
+
+                        prompt_text = None
+                        if rendered_prompts is not None and b < len(rendered_prompts):
+                            prompt_text = rendered_prompts[b]
+
                         vsibench_score = None
                         vsibench_score_debug = None
                         if isinstance(doc, dict):
@@ -1763,6 +2151,70 @@ class Qwen3_VL_Experiments(lmms):
                                     token_attn,
                                 )
 
+                        # Option word attention (for MCA prompts)
+                        options_texts = _extract_options_from_prompt(prompt_text) if isinstance(prompt_text, str) else []
+                        option_words = None
+                        option_word_attn = None
+                        if options_texts and opt_attn_vecs is not None:
+                            option_words = []
+                            option_word_attn = []
+                            for oi, opt_text in enumerate(options_texts[: len(opt_attn_vecs)]):
+                                attn_vec = opt_attn_vecs[oi]
+                                if attn_vec is None:
+                                    option_words.append(_split_words(opt_text))
+                                    option_word_attn.append([0.0 for _ in option_words[-1]])
+                                    continue
+
+                                # Slice to the true token count if available
+                                try:
+                                    n_tok = None
+                                    if isinstance(attn_debug.get("option_token_counts"), list) and b < len(attn_debug["option_token_counts"]):
+                                        cnts = attn_debug["option_token_counts"][b]
+                                        if isinstance(cnts, list) and oi < len(cnts):
+                                            n_tok = int(cnts[oi])
+                                    token_attn = attn_vec.astype(float).tolist()
+                                    if n_tok is not None and n_tok > 0:
+                                        token_attn = token_attn[:n_tok]
+                                except Exception:
+                                    token_attn = attn_vec.astype(float).tolist()
+
+                                prompt = prompt_text or ""
+                                start_char = prompt.find(opt_text) if prompt else -1
+                                end_char = start_char + len(opt_text) if start_char >= 0 else -1
+
+                                tok_idxs_prompt: list[int] = []
+                                if start_char >= 0 and prompt:
+                                    try:
+                                        enc = self.tokenizer(
+                                            prompt,
+                                            add_special_tokens=False,
+                                            return_offsets_mapping=True,
+                                        )
+                                        offsets = enc.get("offset_mapping")
+                                        if offsets is not None:
+                                            for i, (s, e) in enumerate(offsets):
+                                                if s is None or e is None or e <= s:
+                                                    continue
+                                                if s < end_char and e > start_char:
+                                                    tok_idxs_prompt.append(int(i))
+                                    except Exception:
+                                        tok_idxs_prompt = []
+
+                                if tok_idxs_prompt and len(tok_idxs_prompt) == len(token_attn) and start_char >= 0:
+                                    w, wa = _aggregate_question_attn_to_words_from_offsets(
+                                        tokenizer=self.tokenizer,
+                                        prompt_text=prompt,
+                                        question_text=opt_text,
+                                        question_char_span=(int(start_char), int(end_char)),
+                                        question_token_indices_prompt=tok_idxs_prompt,
+                                        token_attn=[float(x) for x in token_attn],
+                                    )
+                                else:
+                                    w = _split_words(opt_text)
+                                    wa = [0.0 for _ in w]
+                                option_words.append(w)
+                                option_word_attn.append(wa)
+
                         sample_tag = f"{now}_b{b}_chunk{idx}"
                         metadata = {
                             "model": "qwen3_vl_experiments",
@@ -1780,6 +2232,9 @@ class Qwen3_VL_Experiments(lmms):
                             "question_text": question_text,
                             "question_words": question_words,
                             "question_word_attn": question_word_attn,
+                            "options_texts": options_texts if options_texts else None,
+                            "option_words": option_words,
+                            "option_word_attn": option_word_attn,
                             "vsibench_accuracy": vsibench_score,
                             "vsibench_accuracy_debug": vsibench_score_debug,
                             "gen_kwargs": gen_kwargs,

@@ -16,11 +16,15 @@ from lmms_eval.models.simple.qwen3_vl_experiments import (
     Qwen3_VL_Experiments as Qwen3_VL_ExperimentsSimple,
     _best_factor_pair,
     _compute_vsibench_accuracy,
+    _extract_options_from_prompt,
     _find_subsequence,
     _aggregate_token_attn_to_words,
     _aggregate_question_attn_to_words_from_offsets,
+    _split_words,
     _safe_path_component,
     _save_experiment_artifacts,
+    _images_to_uint8_video,
+    _doc_images_to_uint8_video,
     _to_uint8_video,
 )
 from lmms_eval.protocol import ChatMessages
@@ -138,9 +142,11 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
             start_time = time.time()
             avg_attn_to_vision = None
             avg_attn_to_question = None
+            avg_attn_to_options = None
             attn_debug = {}
             if save_attn:
                 question_texts = []
+                option_texts_per_sample = []
                 for b in range(len(doc_id)):
                     try:
                         d = self.task_dict[task[b]][split[b]][doc_id[b]]
@@ -148,11 +154,15 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     except Exception:
                         question_texts.append("")
 
-                sequences, avg_attn_to_vision, avg_attn_to_question, attn_debug = self._greedy_generate_with_attn_capture(
+                    # Use the actually-rendered prompt to extract options (most reliable)
+                    option_texts_per_sample.append(_extract_options_from_prompt(texts[b] if b < len(texts) else ""))
+
+                sequences, avg_attn_to_vision, avg_attn_to_question, avg_attn_to_options, attn_debug = self._greedy_generate_with_attn_capture(
                     inputs,
                     generate_kwargs,
                     question_texts=question_texts,
                     prompt_texts=texts,
+                    option_texts_per_sample=option_texts_per_sample,
                 )
             else:
                 cont = self.model.generate(**inputs, **generate_kwargs)
@@ -188,10 +198,29 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     q_attn_vec = None
                     if avg_attn_to_question is not None:
                         q_attn_vec = avg_attn_to_question[b].detach().float().cpu().numpy()
+
+                    opt_attn_vecs = None
+                    if avg_attn_to_options is not None:
+                        opt_attn_vecs = []
+                        for vopt in avg_attn_to_options:
+                            if vopt is None:
+                                opt_attn_vecs.append(None)
+                            else:
+                                opt_attn_vecs.append(vopt[b].detach().float().cpu().numpy())
+                    doc = None
+                    try:
+                        doc = self.task_dict[task[b]][split[b]][doc_id[b]]
+                    except Exception:
+                        doc = None
+
                     video_frames = None
                     fps = None
                     if video_inputs is not None and b < len(video_inputs):
                         video_frames = _to_uint8_video(video_inputs[b])
+                    if video_frames is None and image_inputs is not None and b < len(image_inputs):
+                        video_frames = _images_to_uint8_video(image_inputs[b])
+                    if video_frames is None:
+                        video_frames = _doc_images_to_uint8_video(doc)
                     if video_metadatas is not None and b < len(video_metadatas):
                         md = video_metadatas[b] or {}
                         fps = md.get("fps") if isinstance(md, dict) else None
@@ -208,11 +237,6 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         h, w = _best_factor_pair(tokens_per_frame)
                         attn_map_thw = attn_vec[: num_frames * tokens_per_frame].reshape(num_frames, h, w)
 
-                    doc = None
-                    try:
-                        doc = self.task_dict[task[b]][split[b]][doc_id[b]]
-                    except Exception:
-                        doc = None
                     vsibench_score = None
                     vsibench_score_debug = None
                     if isinstance(doc, dict):
@@ -294,6 +318,71 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                                 token_attn,
                             )
 
+                    # Option word attention (for MCA prompts)
+                    prompt_text = texts[b] if b < len(texts) else ""
+                    options_texts = _extract_options_from_prompt(prompt_text) if isinstance(prompt_text, str) else []
+                    option_words = None
+                    option_word_attn = None
+                    if options_texts and opt_attn_vecs is not None:
+                        option_words = []
+                        option_word_attn = []
+                        for oi, opt_text in enumerate(options_texts[: len(opt_attn_vecs)]):
+                            attn_vec = opt_attn_vecs[oi]
+                            if attn_vec is None:
+                                w = _split_words(opt_text)
+                                option_words.append(w)
+                                option_word_attn.append([0.0 for _ in w])
+                                continue
+
+                            # Slice to true token count if available
+                            try:
+                                n_tok = None
+                                if isinstance(attn_debug.get("option_token_counts"), list) and b < len(attn_debug["option_token_counts"]):
+                                    cnts = attn_debug["option_token_counts"][b]
+                                    if isinstance(cnts, list) and oi < len(cnts):
+                                        n_tok = int(cnts[oi])
+                                token_attn = attn_vec.astype(float).tolist()
+                                if n_tok is not None and n_tok > 0:
+                                    token_attn = token_attn[:n_tok]
+                            except Exception:
+                                token_attn = attn_vec.astype(float).tolist()
+
+                            start_char = prompt_text.find(opt_text) if prompt_text else -1
+                            end_char = start_char + len(opt_text) if start_char >= 0 else -1
+
+                            tok_idxs_prompt: list[int] = []
+                            if start_char >= 0 and prompt_text:
+                                try:
+                                    enc = self.tokenizer(
+                                        prompt_text,
+                                        add_special_tokens=False,
+                                        return_offsets_mapping=True,
+                                    )
+                                    offsets = enc.get("offset_mapping")
+                                    if offsets is not None:
+                                        for i, (s, e) in enumerate(offsets):
+                                            if s is None or e is None or e <= s:
+                                                continue
+                                            if s < end_char and e > start_char:
+                                                tok_idxs_prompt.append(int(i))
+                                except Exception:
+                                    tok_idxs_prompt = []
+
+                            if tok_idxs_prompt and len(tok_idxs_prompt) == len(token_attn) and start_char >= 0:
+                                w, wa = _aggregate_question_attn_to_words_from_offsets(
+                                    tokenizer=self.tokenizer,
+                                    prompt_text=prompt_text,
+                                    question_text=opt_text,
+                                    question_char_span=(int(start_char), int(end_char)),
+                                    question_token_indices_prompt=tok_idxs_prompt,
+                                    token_attn=[float(x) for x in token_attn],
+                                )
+                            else:
+                                w = _split_words(opt_text)
+                                wa = [0.0 for _ in w]
+                            option_words.append(w)
+                            option_word_attn.append(wa)
+
                     sample_tag = f"{now}_{task[b]}_{split[b]}_{doc_id[b]}"
                     metadata = {
                         "model": "qwen3_vl_experiments_chat",
@@ -308,6 +397,9 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         "question_text": question_text,
                         "question_words": question_words,
                         "question_word_attn": question_word_attn,
+                        "options_texts": options_texts if options_texts else None,
+                        "option_words": option_words,
+                        "option_word_attn": option_word_attn,
                         "vsibench_accuracy": vsibench_score,
                         "vsibench_accuracy_debug": vsibench_score_debug,
                         "gen_kwargs": gen_kwargs,
