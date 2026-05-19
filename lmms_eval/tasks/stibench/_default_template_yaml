@@ -1,0 +1,58 @@
+dataset_path: /home/ramanathan/data/STI-Bench
+
+output_type: generate_until
+process_docs: !function utils.process_docs
+doc_to_visual: !function utils.stibench_doc_to_visual
+doc_to_text: !function utils.stibench_doc_to_text
+doc_to_target: "Answer"
+generation_kwargs:
+  max_new_tokens: 16
+  temperature: 0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+# The return value of process_results will be used by metrics
+process_results: !function utils.stibench_process_results
+metric_list:
+  - metric: stibench_overall
+    aggregation: !function utils.stibench_aggregate_overall
+    higher_is_better: true
+  - metric: task_3d_video_grounding_accuracy
+    aggregation: !function utils.stibench_aggregate_3d_video_grounding_accuracy
+    higher_is_better: true
+  - metric: task_dimensional_measurement_accuracy
+    aggregation: !function utils.stibench_aggregate_dimensional_measurement_accuracy
+    higher_is_better: true
+  - metric: task_displacement_and_path_length_accuracy
+    aggregation: !function utils.stibench_aggregate_displacement_and_path_length_accuracy
+    higher_is_better: true
+  - metric: task_ego-centric_orientation_accuracy
+    aggregation: !function utils.stibench_aggregate_ego_centric_orientation_accuracy
+    higher_is_better: true
+  - metric: task_pose_estimation_accuracy
+    aggregation: !function utils.stibench_aggregate_pose_estimation_accuracy
+    higher_is_better: true
+  - metric: task_spatial_relation_accuracy
+    aggregation: !function utils.stibench_aggregate_spatial_relation_accuracy
+    higher_is_better: true
+  - metric: task_speed_and_acceleration_accuracy
+    aggregation: !function utils.stibench_aggregate_speed_and_acceleration_accuracy
+    higher_is_better: true
+  - metric: task_trajectory_description_accuracy
+    aggregation: !function utils.stibench_aggregate_trajectory_description_accuracy
+    higher_is_better: true
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    mca_post_prompt: "Answer with the option's letter from the given choices directly."
+    na_post_prompt: "Please answer the question using a single word or phrase."
+  gemini_api:
+    pre_prompt: ""
+    mca_post_prompt: "Answer with the option's letter from the given choices directly."
+    na_post_prompt: "Do not response anything other than a single number!"
+  gpt4v:
+    pre_prompt: ""
+    mca_post_prompt: "Answer with the option's letter from the given choices directly."
+    na_post_prompt: "Do not response anything other than a single number!"
+metadata:
+  - version: 0.0

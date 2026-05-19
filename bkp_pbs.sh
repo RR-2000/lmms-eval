@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-STI
+#PBS -N lmms-Q3_5
 #PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:host=cvml03
 
 # Activate the Conda environment
@@ -11,15 +11,15 @@ conda activate lmms
 
 # LMMS_EVAL_EXPERIMENTS_SAVE_MP4=1
 # LMMS_EVAL_EXPERIMENTS_SAVE_NPZ=1
-LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_sti/qwen3 LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 python -m lmms_eval \
-  --model qwen3_vl_experiments \
-  --model_args max_num_frames=8 \
-  --tasks stibench \
+python -m lmms_eval \
+  --model qwen3_5 \
+  --model_args max_num_frames=32 \
+  --tasks vsibench_object_appearance_order \
   --batch_size 1 \
-  --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/STI_Q3
+  --limit 200 \
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/VSI_Q3.5
 
-# vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench, stibench
+# vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench
 # How to enable
 
 # Set LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1

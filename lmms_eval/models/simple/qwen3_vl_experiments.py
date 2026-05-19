@@ -2227,7 +2227,7 @@ class Qwen3_VL_Experiments(lmms):
                             "prompt_rendered": prompt_text,
                             "prompt_context": contexts[b] if b < len(contexts) else None,
                             "answer": answers[b] if b < len(answers) else None,
-                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) else None,
+                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("answer") if isinstance(doc, dict) else None,
                             "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
                             "question_text": question_text,
                             "question_words": question_words,
@@ -2259,15 +2259,37 @@ class Qwen3_VL_Experiments(lmms):
                         # Also save split by task type (VSIBench question_type)
                         if task_type:
                             out_dir_by_type = out_dir / "by_task_type" / _safe_path_component(str(task_type))
-                            _save_experiment_artifacts(
-                                out_dir_by_type,
-                                sample_tag,
-                                attn_map_thw,
-                                video_frames,
-                                metadata,
-                                save_mp4=save_mp4,
-                                save_npz=save_npz,
-                            )
+                            is_mcq = False
+                            try:
+                                from lmms_eval.tasks.vsibench.utils import MCA_QUESTION_TYPES
+
+                                is_mcq = str(task_type) in MCA_QUESTION_TYPES
+                            except Exception:
+                                is_mcq = False
+
+                            if not is_mcq or vsibench_score is None:
+                                _save_experiment_artifacts(
+                                    out_dir_by_type,
+                                    sample_tag,
+                                    attn_map_thw,
+                                    video_frames,
+                                    metadata,
+                                    save_mp4=save_mp4,
+                                    save_npz=save_npz,
+                                )
+
+                            if is_mcq and vsibench_score is not None:
+                                mcq_bucket = "correct" if float(vsibench_score) >= 1.0 else "incorrect"
+                                out_dir_by_mcq = out_dir_by_type / mcq_bucket
+                                _save_experiment_artifacts(
+                                    out_dir_by_mcq,
+                                    sample_tag,
+                                    attn_map_thw,
+                                    video_frames,
+                                    metadata,
+                                    save_mp4=save_mp4,
+                                    save_npz=save_npz,
+                                )
 
         res = re_ords.get_original(res)
         pbar.close()

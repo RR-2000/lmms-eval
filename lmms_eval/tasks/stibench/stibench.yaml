@@ -1,0 +1,9 @@
+# dataset_name: full
+test_split: test
+task: "stibench"
+dataset_kwargs:
+  token: True
+  cache_dir: /home/ramanathan/data/STI-Bench
+  video: True
+include: _default_template_yaml
+
