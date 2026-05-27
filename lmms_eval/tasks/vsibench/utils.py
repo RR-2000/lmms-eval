@@ -41,14 +41,20 @@ with open(Path(__file__).parent / "vsibench.yaml", "r") as f:
         if "!function" not in line:
             safe_data.append(line)
 cache_name = yaml.safe_load("".join(safe_data))["dataset_kwargs"]["cache_dir"]
+overwrite_cache_dir = yaml.safe_load("".join(safe_data))["dataset_kwargs"]["dataset_path"]
 
 
 def vsibench_doc_to_visual(doc):
-    cache_dir = os.path.join(base_cache_dir, cache_name)
+    if os.path.exists(overwrite_cache_dir):
+        cache_dir = overwrite_cache_dir
+    else:
+        cache_dir = os.path.join(base_cache_dir, cache_name)
     video_path = doc["dataset"] + "/" + doc["scene_name"] + ".mp4"
     video_path = os.path.join(cache_dir, video_path)
     if os.path.exists(video_path):
         video_path = video_path
+    elif os.path.exists('_'.join(video_path[:-4].split('_')[:-1])+'.mp4'):
+        video_path = '_'.join(video_path[:-4].split('_')[:-1]) + '.mp4'
     else:
         raise FileExistsError(f"video path:{video_path} does not exist.")
     return [video_path]

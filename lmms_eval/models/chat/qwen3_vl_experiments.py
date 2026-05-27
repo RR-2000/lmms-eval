@@ -26,6 +26,7 @@ from lmms_eval.models.simple.qwen3_vl_experiments import (
     _images_to_uint8_video,
     _doc_images_to_uint8_video,
     _to_uint8_video,
+    _estimate_video_fps,
 )
 from lmms_eval.protocol import ChatMessages
 
@@ -150,7 +151,10 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                 for b in range(len(doc_id)):
                     try:
                         d = self.task_dict[task[b]][split[b]][doc_id[b]]
-                        question_texts.append(d.get("question", "") if isinstance(d, dict) else "")
+                        if isinstance(d, dict):
+                            question_texts.append(d.get("question") or d.get("Question") or "")
+                        else:
+                            question_texts.append("")
                     except Exception:
                         question_texts.append("")
 
@@ -224,6 +228,21 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     if video_metadatas is not None and b < len(video_metadatas):
                         md = video_metadatas[b] or {}
                         fps = md.get("fps") if isinstance(md, dict) else None
+                    if fps is None and isinstance(doc, dict):
+                        video_path = None
+                        for key in ("video_path", "video", "Video", "path", "filepath"):
+                            val = doc.get(key)
+                            if isinstance(val, str) and val:
+                                video_path = val
+                                break
+                        if video_path is None and (doc.get("Video") or doc.get("Source")):
+                            try:
+                                from lmms_eval.tasks.stibench.utils import stibench_doc_to_visual
+
+                                video_path = stibench_doc_to_visual(doc)[0]
+                            except Exception:
+                                video_path = None
+                        fps = _estimate_video_fps(video_path)
 
                     num_frames = int(video_frames.shape[0]) if video_frames is not None and video_frames.ndim == 4 else 1
                     attn_map_thw = None
@@ -242,7 +261,9 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     if isinstance(doc, dict):
                         vsibench_score, vsibench_score_debug = _compute_vsibench_accuracy(doc, answers[b] if b < len(answers) else "")
 
-                    question_text = doc.get("question") if isinstance(doc, dict) else None
+                    question_text = None
+                    if isinstance(doc, dict):
+                        question_text = doc.get("question") or doc.get("Question")
                     question_words = None
                     question_word_attn = None
                     if isinstance(question_text, str) and q_attn_vec is not None and q_attn_vec.size > 0:
@@ -384,6 +405,13 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                             option_word_attn.append(wa)
 
                     sample_tag = f"{now}_{task[b]}_{split[b]}_{doc_id[b]}"
+                    task_type = None
+                    if isinstance(doc, dict):
+                        task_type = doc.get("question_type")
+                        if not task_type:
+                            task_name = (doc.get("Task") or "").strip()
+                            task_type = task_name.lower().replace(" ", "_").replace("&", "and") if task_name else None
+
                     metadata = {
                         "model": "qwen3_vl_experiments_chat",
                         "timestamp": now,
@@ -392,8 +420,8 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         "doc_id": int(doc_id[b]),
                         "prompt_rendered": texts[b] if b < len(texts) else None,
                         "answer": answers[b] if b < len(answers) else None,
-                        "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) else None,
-                        "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
+                        "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("Answer") if isinstance(doc, dict) else None,
+                        "question_type": task_type,
                         "question_text": question_text,
                         "question_words": question_words,
                         "question_word_attn": question_word_attn,
@@ -410,52 +438,55 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         "attn_h": int(attn_map_thw.shape[1]) if attn_map_thw is not None else None,
                         "attn_w": int(attn_map_thw.shape[2]) if attn_map_thw is not None else None,
                     }
-                    # Save default layout
-                    _save_experiment_artifacts(
-                        out_dir,
-                        sample_tag,
-                        attn_map_thw,
-                        video_frames,
-                        metadata,
-                        save_mp4=save_mp4,
-                        save_npz=save_npz,
-                    )
-
-                    # Also save split by task type (VSIBench question_type)
-                    task_type = doc.get("question_type") if isinstance(doc, dict) else None
+                    task_save = False
+                    # Also save split by task type (STI/VSI Bench)
                     if task_type:
                         out_dir_by_type = out_dir / "by_task_type" / _safe_path_component(str(task_type))
-                        is_mcq = False
-                        try:
-                            from lmms_eval.tasks.vsibench.utils import MCA_QUESTION_TYPES
+                        _save_experiment_artifacts(
+                            out_dir_by_type,
+                            sample_tag,
+                            attn_map_thw,
+                            video_frames,
+                            metadata,
+                            save_mp4=save_mp4,
+                            save_npz=save_npz,
+                        )
+                        task_save = True
 
-                            is_mcq = str(task_type) in MCA_QUESTION_TYPES
-                        except Exception:
+                        if vsibench_score is not None:
                             is_mcq = False
+                            try:
+                                from lmms_eval.tasks.vsibench.utils import MCA_QUESTION_TYPES
 
-                        if not is_mcq or vsibench_score is None:
-                            _save_experiment_artifacts(
-                                out_dir_by_type,
-                                sample_tag,
-                                attn_map_thw,
-                                video_frames,
-                                metadata,
-                                save_mp4=save_mp4,
-                                save_npz=save_npz,
-                            )
+                                is_mcq = str(task_type) in MCA_QUESTION_TYPES
+                            except Exception:
+                                is_mcq = False
 
-                        if is_mcq and vsibench_score is not None:
-                            mcq_bucket = "correct" if float(vsibench_score) >= 1.0 else "incorrect"
-                            out_dir_by_mcq = out_dir_by_type / mcq_bucket
-                            _save_experiment_artifacts(
-                                out_dir_by_mcq,
-                                sample_tag,
-                                attn_map_thw,
-                                video_frames,
-                                metadata,
-                                save_mp4=save_mp4,
-                                save_npz=save_npz,
-                            )
+                            if is_mcq:
+                                mcq_bucket = "correct" if float(vsibench_score) >= 1.0 else "incorrect"
+                                out_dir_by_mcq = out_dir_by_type / mcq_bucket
+                                _save_experiment_artifacts(
+                                    out_dir_by_mcq,
+                                    sample_tag,
+                                    attn_map_thw,
+                                    video_frames,
+                                    metadata,
+                                    save_mp4=save_mp4,
+                                    save_npz=save_npz,
+                                )
+                    
+                    if not task_save:
+                        # Save default layout
+                        _save_experiment_artifacts(
+                            out_dir,
+                            sample_tag,
+                            attn_map_thw,
+                            video_frames,
+                            metadata,
+                            save_mp4=save_mp4,
+                            save_npz=save_npz,
+                        )
+                            
             pbar.update(1)
 
         res = re_ords.get_original(res)

@@ -70,7 +70,7 @@ def stibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     lmms_eval_specific_kwargs = lmms_eval_specific_kwargs or {}
     question = doc["Question"].strip()
     prompt = (doc.get("Prompt") or "").strip()
-    question_type = (doc.get("QType") or "").strip().lower()
+    question_type = (doc.get("Task") or "").strip().lower()
 
     pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "") or "These are frames of a video."
     post_prompt = lmms_eval_specific_kwargs.get("mca_post_prompt", "") or "Answer with the option's letter from the given choices directly."

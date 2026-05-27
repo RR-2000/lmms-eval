@@ -1,4 +1,4 @@
-dataset_path: /home/ramanathan/data/VSI-Bench #/mnt/rdata4_3/Spatial_Benchmarks/VSI-Bench #nyu-visionx/VSI-Bench
+dataset_path: /home/ramanathan/data/VSI-Bench_new #/mnt/rdata4_3/Spatial_Benchmarks/VSI-Bench #nyu-visionx/VSI-Bench
 
 output_type: generate_until
 process_docs: !function utils.process_docs

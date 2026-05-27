@@ -294,6 +294,70 @@ def _try_write_mp4(path: Path, frames_uint8: np.ndarray, fps: Optional[float] = 
             return False, msg
 
 
+def _parse_fps_value(raw: str) -> Optional[float]:
+    val = (raw or "").strip()
+    if not val or val == "0/0":
+        return None
+    if "/" in val:
+        num, denom = val.split("/", 1)
+        try:
+            n = float(num)
+            d = float(denom)
+        except ValueError:
+            return None
+        if d > 0:
+            return n / d
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+
+def _estimate_video_fps(video_path: Optional[str]) -> Optional[float]:
+    if not video_path:
+        return None
+    path = Path(video_path)
+    if not path.exists():
+        return None
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is not None:
+        for key in ("avg_frame_rate", "r_frame_rate"):
+            cmd = [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                f"stream={key}",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                str(path),
+            ]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                fps = _parse_fps_value(proc.stdout.splitlines()[0] if proc.stdout else "")
+                if fps:
+                    return fps
+            except Exception:
+                pass
+
+    try:
+        import cv2  # type: ignore
+
+        cap = cv2.VideoCapture(str(path))
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+        cap.release()
+        if fps and fps > 0:
+            return fps
+    except Exception:
+        return None
+
+    return None
+
+
 def _normalize_to_uint8_heatmap(attn: np.ndarray) -> np.ndarray:
     # attn: (T, H, W) float in [0, 1] or unnormalized
     a = attn.astype(np.float32)
@@ -2227,7 +2291,7 @@ class Qwen3_VL_Experiments(lmms):
                             "prompt_rendered": prompt_text,
                             "prompt_context": contexts[b] if b < len(contexts) else None,
                             "answer": answers[b] if b < len(answers) else None,
-                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("answer") if isinstance(doc, dict) else None,
+                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("Answer") if isinstance(doc, dict) else None,
                             "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
                             "question_text": question_text,
                             "question_words": question_words,
@@ -2245,16 +2309,7 @@ class Qwen3_VL_Experiments(lmms):
                             "attn_h": int(attn_map_thw.shape[1]) if attn_map_thw is not None else None,
                             "attn_w": int(attn_map_thw.shape[2]) if attn_map_thw is not None else None,
                         }
-                        # Save default layout
-                        _save_experiment_artifacts(
-                            out_dir,
-                            sample_tag,
-                            attn_map_thw,
-                            video_frames,
-                            metadata,
-                            save_mp4=save_mp4,
-                            save_npz=save_npz,
-                        )
+                        task_save = False
 
                         # Also save split by task type (VSIBench question_type)
                         if task_type:
@@ -2277,6 +2332,7 @@ class Qwen3_VL_Experiments(lmms):
                                     save_mp4=save_mp4,
                                     save_npz=save_npz,
                                 )
+                            task_save = True
 
                             if is_mcq and vsibench_score is not None:
                                 mcq_bucket = "correct" if float(vsibench_score) >= 1.0 else "incorrect"
@@ -2290,6 +2346,18 @@ class Qwen3_VL_Experiments(lmms):
                                     save_mp4=save_mp4,
                                     save_npz=save_npz,
                                 )
+
+                        if not task_save:
+                            # Save default layout
+                            _save_experiment_artifacts(
+                                out_dir,
+                                sample_tag,
+                                attn_map_thw,
+                                video_frames,
+                                metadata,
+                                save_mp4=save_mp4,
+                                save_npz=save_npz,
+                            )
 
         res = re_ords.get_original(res)
         pbar.close()

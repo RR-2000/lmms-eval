@@ -1,0 +1,13 @@
+dataset_name: baseline_bbox_object_size_estimation
+test_split: bbox
+task: "vsibench_baseline_bbox_object_size_estimation"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: _default_template_yaml
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    mca_post_prompt: "Answer with the option's letter from the given choices directly."
+    na_post_prompt: "Please answer the question using a single word or phrase."

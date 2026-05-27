@@ -1,25 +1,26 @@
 #!/bin/bash
-#PBS -N lmms-STI
-#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:host=cvml03
+#PBS -N lmms-mmsi_new
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:host=cvml07
 
 # Activate the Conda environment
 source /apps/miniconda3/etc/profile.d/conda.sh
 # source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 cd /home/ramanathan/VLM/lmms-eval
-
+nvidia-smi
 conda activate lmms
 
 # LMMS_EVAL_EXPERIMENTS_SAVE_MP4=1
 # LMMS_EVAL_EXPERIMENTS_SAVE_NPZ=1
-LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_sti/qwen3 LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 python -m lmms_eval \
+LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_MMSI_new/qwen3 LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 python -m lmms_eval \
   --model qwen3_vl_experiments \
-  --model_args max_num_frames=8 \
-  --tasks stibench \
+  --model_args max_num_frames=16 \
+  --tasks mmsi_bench \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/STI_Q3
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/MMSI_new
 
-# vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench, stibench
+# vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench, stibench, vsibench_object_appearance_order, 
+# vsibench_baseline_bbox_object_size_estimation
 # How to enable
 
 # Set LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1
