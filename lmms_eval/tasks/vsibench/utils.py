@@ -49,7 +49,14 @@ def vsibench_doc_to_visual(doc):
         cache_dir = overwrite_cache_dir
     else:
         cache_dir = os.path.join(base_cache_dir, cache_name)
+    
+    doc["dataset"] = doc["dataset"].replace("_frames_24", "_frames_6")
     video_path = doc["dataset"] + "/" + doc["scene_name"] + ".mp4"
+    if "bboxes" in doc['dataset']:
+        video_path_alt = doc["dataset"].replace("bboxes", "bboxes_dense") + "/" + doc["scene_name"] + ".mp4"
+        if os.path.exists(os.path.join(cache_dir, video_path_alt)):
+            video_path = video_path_alt
+        
     video_path = os.path.join(cache_dir, video_path)
     if os.path.exists(video_path):
         video_path = video_path
@@ -59,12 +66,82 @@ def vsibench_doc_to_visual(doc):
         raise FileExistsError(f"video path:{video_path} does not exist.")
     return [video_path]
 
+def path_to_resolution(video_path):
+    # without loading the video, check the metadata to get the resolution
+
+    video_path = Path(video_path)
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    import cv2
+
+    video = cv2.VideoCapture(str(video_path))
+    if not video.isOpened():
+        raise ValueError(f"Unable to open video file: {video_path}")
+
+    try:
+        width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    finally:
+        video.release()
+
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Unable to read video resolution from metadata: {video_path}")
+
+    return width, height
 
 def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     question = doc["question"]
 
     pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "") or "These are frames of a video."
 
+    LOC_TEXT = os.getenv("LMMS_EVAL_INCLUDE_LOCATION_TEXT", "0") == "1"
+    
+    if LOC_TEXT and ("object_rel" in doc["question_type"] or doc["question_type"] in ["obj_appearance_order", "object_counting", "object_size_estimation"]):
+        vid_path = vsibench_doc_to_visual(doc)[0]
+        width, height = path_to_resolution(vid_path)
+        vid_path = vid_path.replace(".mp4", "/")
+        objects = sorted(os.listdir(vid_path))
+        obj_names = [obj.replace('.json', '').replace('bboxes_', '') for obj in objects]
+        max_frames = 32
+        frame_interval = 1
+        fps = 12
+        obj_bboxes = []
+        pre_prompt += (
+            f" The video contains the following objects: {', '.join(obj_names)}. "
+            "Each object may have bounding box annotations for each frame, given in the "
+            "format: "
+            "time:[<object_name>[x_min, y_min, x_max, y_max], "
+            "<object_name>[x_min, y_min, x_max, y_max]].\n"
+        )
+        for obj in objects:
+            json_file = os.path.join(vid_path, obj)
+            if os.path.isfile(json_file) and obj.endswith('.json'):
+                with open(json_file, 'r') as f:
+                    data = yaml.safe_load(f)
+                    num_frames = len(data)
+                    if num_frames < max_frames:
+                        raise ValueError(f"Number of frames for object {obj} is less than max_frames ({num_frames} < {max_frames}).")
+                    frame_interval = max(1, num_frames // max_frames)
+                    sampled_frames = [data[str(i)] for i in range(0, num_frames, frame_interval)][:max_frames]
+                    obj_bboxes.append(sampled_frames)
+                    if len(obj_bboxes) >= 1:
+                        assert len(obj_bboxes[-1]) == len(obj_bboxes[0]), f"Number of sampled frames for object {obj} is different from the first object ({len(obj_bboxes[-1])} != {len(obj_bboxes[0])})."
+        
+        for frame_idx in range(len(obj_bboxes[0])):
+            time = frame_interval * frame_idx / fps
+            frame_entries = []
+            for obj_idx, obj in enumerate(obj_names):
+                bbox = list(obj_bboxes[obj_idx][frame_idx])
+
+                for bbox_idx, bbox_i in enumerate(bbox):
+                    frame_entries.append(
+                        f"{obj}_{bbox_idx+1}[{bbox_i[0]*width:.2f}, {bbox_i[1]*height:.2f}, {bbox_i[2]*width:.2f}, {bbox_i[3]*height:.2f}]"
+                    )
+            if len(frame_entries) > 0:
+                pre_prompt += f" At time {time:.2f}s:[{', '.join(frame_entries)}]\n"
+    print(f"pre_prompt: {pre_prompt}")
+    # exit()
     if doc["question_type"] in NA_QUESTION_TYPES:
         post_prompt = lmms_eval_specific_kwargs.get("na_post_prompt", "") or "Please answer the question using a single word or phrase."
         return pre_prompt + "\n" + question + "\n" + post_prompt
@@ -118,6 +195,8 @@ def to_float(pred):
 
 def vsibench_process_results(doc, results):
     doc["prediction"] = results[0]
+    # print(results[0])
+    # exit()
     if doc["question_type"] in MCA_QUESTION_TYPES:
         for key, value in METRICS_FOR_MCA.items():
             doc[key] = eval(value)(fuzzy_matching(doc["prediction"]), doc["ground_truth"])

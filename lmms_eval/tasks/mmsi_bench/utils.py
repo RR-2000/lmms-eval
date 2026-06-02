@@ -34,7 +34,9 @@ def msr_doc_to_text(doc, lmms_eval_specific_kwargs=None):
         question = f"{question}{post_prompt}"
     return question
 
+FLIP_FLOP = False
 def msr_doc_to_visual(doc):
+    global FLIP_FLOP
     print(f"Extracting images from doc with id: {doc['id']}")
     image_list = []
     for img_data in doc["images"]:
@@ -48,13 +50,18 @@ def msr_doc_to_visual(doc):
     # if True:
     print(f"Drawing ORB correspondences for {len(image_list)} images in doc {doc['id']}")
     image_list = draw_orb_correspondences(image_list)
+    if FLIP_FLOP:
+        print(f"Finished processing doc {doc['id']}")
+        exit()
+    else:
+        FLIP_FLOP = True
     return image_list
 
 
 def draw_orb_correspondences(
     images,
     grid_size: int = 15,
-    max_matches: int = 60,
+    max_matches: int = 10,
     use_ransac: bool = False,
 ):
     try:
@@ -75,10 +82,18 @@ def draw_orb_correspondences(
     descriptors_by_image = []
     keypoints_by_image = []
 
-    orb = cv2.ORB_create()
+    try:
+        detector = cv2.SIFT_create()
+        matcher_norm = cv2.NORM_L2
+        detector_name = "SIFT"
+    except Exception:
+        detector = cv2.ORB_create()
+        matcher_norm = cv2.NORM_HAMMING
+        detector_name = "ORB"
+    print(f"[corr] Using {detector_name} keypoints")
     for idx, np_img in enumerate(np_images):
         regions = _grid_regions(np_img.shape[1], np_img.shape[0], grid_size)
-        keypoints, descriptors = orb.detectAndCompute(np_img, None)
+        keypoints, descriptors = detector.detectAndCompute(np_img, None)
         print(
             f"[corr] Image {idx}: keypoints={0 if keypoints is None else len(keypoints)}, "
             f"descriptors={'none' if descriptors is None else len(descriptors)}"
@@ -101,7 +116,7 @@ def draw_orb_correspondences(
         print("[corr] Reference image has no descriptors; skipping")
         return images
 
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    bf = cv2.BFMatcher(matcher_norm, crossCheck=True)
     colors = _color_palette(max_matches)
     output_images = [img.copy() for img in np_images]
 
@@ -124,12 +139,33 @@ def draw_orb_correspondences(
         print(f"[corr] Image {idx}: {len(matches)} matches, {len(inlier_matches)} inliers")
 
         for color_idx, match in enumerate(inlier_matches):
+            print(f"[corr] Image {idx}: match {color_idx} - ref_idx={match.queryIdx}, tgt_idx={match.trainIdx}, distance={match.distance:.2f}")
             ref_center = reference_centers[match.queryIdx]
             tgt_center = centers[match.trainIdx]
             color = colors[color_idx % len(colors)]
-            cv2.circle(output_images[0], ref_center, 50, color, -1)
-            cv2.circle(output_images[idx], tgt_center, 50, color, -1)
+            output_images[0] = cv2.circle(output_images[0], ref_center, 50, color, -1)
+            output_images[idx] = cv2.circle(output_images[idx], tgt_center, 50, color, -1)
+    # save all output images for debugging
+    for idx, img in enumerate(output_images):
+        output_path = f"orb_output_{idx}.png"
+        Image.fromarray(img).save(output_path)
+        print(f"[corr] Saved {output_path}")
 
+    # save paired views (reference + target) for easier correspondence inspection
+    ref_img = output_images[0]
+    for idx in range(1, len(output_images)):
+        tgt_img = output_images[idx]
+        h_ref, w_ref = ref_img.shape[:2]
+        h_tgt, w_tgt = tgt_img.shape[:2]
+        h_out = max(h_ref, h_tgt)
+        ref_pad = np.zeros((h_out, w_ref, 3), dtype=ref_img.dtype)
+        tgt_pad = np.zeros((h_out, w_tgt, 3), dtype=tgt_img.dtype)
+        ref_pad[:h_ref, :w_ref] = ref_img
+        tgt_pad[:h_tgt, :w_tgt] = tgt_img
+        paired = np.concatenate([ref_pad, tgt_pad], axis=1)
+        output_path = f"orb_pair_0_{idx}.png"
+        Image.fromarray(paired).save(output_path)
+        print(f"[corr] Saved {output_path}")
     return [Image.fromarray(img).convert("RGB") for img in output_images]
 
 
@@ -207,10 +243,32 @@ def _spatially_verify_matches(ref_kps, tgt_kps, matches, use_ransac: bool = True
 
 
 def _color_palette(count: int):
-    colors = []
-    for idx in range(count):
-        hue = idx / max(1, count)
-        r, g, b = _hsv_to_rgb(hue, 0.9, 0.95)
+    # High-contrast qualitative palette (BGR for OpenCV) then HSV fallback.
+    base = [
+        (0, 0, 255),
+        (0, 255, 0),
+        (255, 0, 0),
+        (0, 255, 255),
+        (255, 0, 255),
+        (255, 255, 0),
+        (0, 128, 255),
+        (255, 128, 0),
+        (128, 0, 255),
+        (255, 0, 128),
+        (0, 255, 128),
+        (128, 255, 0),
+        (0, 128, 128),
+        (128, 0, 128),
+        (128, 128, 0),
+    ]
+    if count <= len(base):
+        return base[:count]
+
+    colors = list(base)
+    remaining = count - len(base)
+    for idx in range(remaining):
+        hue = idx / max(1, remaining)
+        r, g, b = _hsv_to_rgb(hue, 0.95, 0.98)
         colors.append((int(b * 255), int(g * 255), int(r * 255)))
     return colors
 

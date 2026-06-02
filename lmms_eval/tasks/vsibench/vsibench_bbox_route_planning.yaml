@@ -1,0 +1,13 @@
+dataset_name: bbox_route_planning
+test_split: bbox
+task: "vsibench_bbox_route_planning"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: _default_template_yaml
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    mca_post_prompt: "Some possible objects are in bounding boxes. Answer with the option's letter from the given choices directly."
+    na_post_prompt: "Some possible objects are in bounding boxes. Please answer the question using a single word or phrase."
