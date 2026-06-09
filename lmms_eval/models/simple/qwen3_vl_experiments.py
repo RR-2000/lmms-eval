@@ -177,6 +177,58 @@ def _doc_images_to_uint8_video(doc: Optional[dict]) -> Optional[np.ndarray]:
     return _to_uint8_video(stacked)
 
 
+def _image_like_to_uint8_video(image_like) -> Optional[np.ndarray]:
+    if image_like is None:
+        return None
+
+    if isinstance(image_like, Image.Image):
+        return _to_uint8_video(np.asarray(image_like.convert("RGB"))[None, ...])
+
+    if isinstance(image_like, (str, os.PathLike)):
+        try:
+            with Image.open(image_like) as img:
+                return _to_uint8_video(np.asarray(img.convert("RGB"))[None, ...])
+        except Exception:
+            return None
+
+    if isinstance(image_like, (bytes, bytearray)):
+        try:
+            with Image.open(io.BytesIO(image_like)) as img:
+                return _to_uint8_video(np.asarray(img.convert("RGB"))[None, ...])
+        except Exception:
+            return None
+
+    return _images_to_uint8_video(image_like)
+
+
+def _collect_doc_extra_artifact_visuals(doc: Optional[dict]) -> dict[str, np.ndarray]:
+    if not isinstance(doc, dict):
+        return {}
+
+    overlay_path = doc.get("overlay_png_path")
+    if not overlay_path:
+        return {}
+
+    visuals: dict[str, np.ndarray] = {}
+
+    base_candidates = [
+        doc.get("resolved_img_path"),
+        doc.get("img_path"),
+        doc.get("image"),
+    ]
+    for candidate in base_candidates:
+        video = _image_like_to_uint8_video(candidate)
+        if video is not None:
+            visuals["base_image"] = video
+            break
+
+    overlay_video = _image_like_to_uint8_video(overlay_path)
+    if overlay_video is not None:
+        visuals["masked_image"] = overlay_video
+
+    return visuals
+
+
 def _ensure_uint8_rgb(frames_uint8: np.ndarray) -> np.ndarray:
     arr = frames_uint8
     if arr.ndim != 4:
@@ -856,6 +908,18 @@ def _save_rollout_png(path: Path, frames_uint8_thwc: np.ndarray) -> tuple[bool, 
         return False, str(exc)
 
 
+def _save_visual_png(path: Path, frames_uint8_thwc: np.ndarray) -> tuple[bool, Optional[str]]:
+    try:
+        rgb = _ensure_uint8_rgb(frames_uint8_thwc)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if rgb.shape[0] == 1:
+            Image.fromarray(rgb[0]).save(path)
+            return True, None
+        return _save_rollout_png(path, rgb)
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _save_experiment_artifacts(
     out_dir: Path,
     sample_tag: str,
@@ -864,6 +928,7 @@ def _save_experiment_artifacts(
     metadata: dict,
     save_mp4: bool = False,
     save_npz: bool = False,
+    extra_visuals: Optional[dict[str, np.ndarray]] = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / sample_tag
@@ -877,6 +942,16 @@ def _save_experiment_artifacts(
         arrays["attn_norm_01_thw"] = attn_norm_01.astype(np.float16)
     if video_uint8 is not None:
         arrays["video_uint8_thwc"] = video_uint8
+    if extra_visuals:
+        for name, frames in extra_visuals.items():
+            if frames is not None:
+                arrays[f"{name}_thwc"] = frames
+    masked_image_attn = None
+    if attn_norm_01 is not None and extra_visuals:
+        masked_image = extra_visuals.get("masked_image")
+        if masked_image is not None:
+            masked_image_attn = _overlay_attention(masked_image, attn_norm_01)
+            arrays["masked_image_attn_thwc"] = masked_image_attn
     if save_npz and arrays:
         np.savez_compressed(base.with_suffix(".npz"), **arrays)
 
@@ -889,6 +964,22 @@ def _save_experiment_artifacts(
     rollout_err = None
     if video_uint8 is not None:
         rollout_ok, rollout_err = _save_rollout_png(base.with_name(base.name + "_rollout.png"), video_uint8)
+
+    extra_visual_statuses: dict[str, tuple[Optional[bool], Optional[str]]] = {}
+    if extra_visuals:
+        for name, frames in extra_visuals.items():
+            ok = None
+            err = None
+            if frames is not None:
+                ok, err = _save_visual_png(base.with_name(base.name + f"_{name}.png"), frames)
+            extra_visual_statuses[name] = (ok, err)
+    masked_image_attn_ok = None
+    masked_image_attn_err = None
+    if masked_image_attn is not None:
+        masked_image_attn_ok, masked_image_attn_err = _save_visual_png(
+            base.with_name(base.name + "_masked_image_attn.png"),
+            masked_image_attn,
+        )
 
     attn_ok = None
     attn_err = None
@@ -944,6 +1035,11 @@ def _save_experiment_artifacts(
     metadata["save_npz"] = bool(save_npz)
     metadata["write_video_rollout_png_ok"] = rollout_ok
     metadata["write_video_rollout_png_error"] = rollout_err
+    for name, (ok, err) in extra_visual_statuses.items():
+        metadata[f"write_{name}_png_ok"] = ok
+        metadata[f"write_{name}_png_error"] = err
+    metadata["write_masked_image_attn_png_ok"] = masked_image_attn_ok
+    metadata["write_masked_image_attn_png_error"] = masked_image_attn_err
     metadata["write_attn_mp4_ok"] = attn_ok
     metadata["write_attn_mp4_error"] = attn_err
     metadata["write_attn_rollout_png_ok"] = attn_rollout_ok
@@ -2137,6 +2233,8 @@ class Qwen3_VL_Experiments(lmms):
                             vsibench_score, vsibench_score_debug = _compute_vsibench_accuracy(doc, answers[b] if b < len(answers) else "")
 
                         task_type = doc.get("question_type") if isinstance(doc, dict) else None
+                        if doc.get("category") is not None:
+                            task_type = doc.get("category")
 
                         question_text = doc.get("question") if isinstance(doc, dict) else None
                         question_words = None
@@ -2280,6 +2378,7 @@ class Qwen3_VL_Experiments(lmms):
                                 option_word_attn.append(wa)
 
                         sample_tag = f"{now}_b{b}_chunk{idx}"
+                        extra_visuals = _collect_doc_extra_artifact_visuals(doc)
                         metadata = {
                             "model": "qwen3_vl_experiments",
                             "timestamp": now,
@@ -2291,7 +2390,7 @@ class Qwen3_VL_Experiments(lmms):
                             "prompt_rendered": prompt_text,
                             "prompt_context": contexts[b] if b < len(contexts) else None,
                             "answer": answers[b] if b < len(answers) else None,
-                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("Answer") if isinstance(doc, dict) else None,
+                            "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("Answer") if doc.get("Answer") is not None else doc.get("answer") if isinstance(doc, dict) else None,
                             "question_type": doc.get("question_type") if isinstance(doc, dict) else None,
                             "question_text": question_text,
                             "question_words": question_words,
@@ -2331,6 +2430,7 @@ class Qwen3_VL_Experiments(lmms):
                                     metadata,
                                     save_mp4=save_mp4,
                                     save_npz=save_npz,
+                                    extra_visuals=extra_visuals,
                                 )
                             task_save = True
 
@@ -2345,6 +2445,7 @@ class Qwen3_VL_Experiments(lmms):
                                     metadata,
                                     save_mp4=save_mp4,
                                     save_npz=save_npz,
+                                    extra_visuals=extra_visuals,
                                 )
 
                         if not task_save:
@@ -2357,6 +2458,7 @@ class Qwen3_VL_Experiments(lmms):
                                 metadata,
                                 save_mp4=save_mp4,
                                 save_npz=save_npz,
+                                extra_visuals=extra_visuals,
                             )
 
         res = re_ords.get_original(res)

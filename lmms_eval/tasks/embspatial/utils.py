@@ -1,8 +1,10 @@
 import logging
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from PIL import ImageDraw
 
 import yaml
 
@@ -43,6 +45,25 @@ def _extract_answer_letter(text: str) -> str:
 def embspatial_doc_to_text(doc: dict[str, Any], lmms_eval_specific_kwargs: Optional[dict[str, Any]] = None) -> str:
     if lmms_eval_specific_kwargs is None:
         lmms_eval_specific_kwargs = {}
+    
+    bbox_prompt = ""
+    EMBSPATIAL_BBOX_TEXT = os.getenv("EMBSPATIAL_BBOX_TEXT", "0").lower() == "1"
+    if EMBSPATIAL_BBOX_TEXT:
+        bboxes = doc["objects"]
+        # {
+        # "bbox": [[221,0,419,112],
+        # [1,43,227,95],
+        # [224,116,129,53],
+        # [358,170,282,310]],
+        # "name": ["banister","chest","table","stairs"]
+        # }
+
+        assert len(bboxes["bbox"]) == len(bboxes["name"]), "Number of bounding boxes and names must match."
+
+        # Order BBox text prompt
+        bbox_prompt = f'Important objects in the image include: {format(", ".join(bboxes["name"]))}.\n'
+        for i, bbox in enumerate(bboxes["bbox"]):
+            bbox_prompt += f' Object {bboxes["name"][i]} circled in {COLOR_PALETTE[i % len(COLOR_PALETTE)]} is located at coordinates (x1: {bbox[0]}, y1: {bbox[1]}, x2: {bbox[2] + bbox[0]}, y2: {bbox[3] + bbox[1]}).\n'
 
     options = doc["answer_options"]
     formatted_lines = []
@@ -50,12 +71,38 @@ def embspatial_doc_to_text(doc: dict[str, Any], lmms_eval_specific_kwargs: Optio
         letter = chr(65 + i)
         formatted_lines.append(f"{letter}) {item}")
     options_string = "\n".join(formatted_lines)
-    prompt = lmms_eval_specific_kwargs.get("pre_prompt", "") + doc["question"] + "\n" + options_string
+    prompt = lmms_eval_specific_kwargs.get("pre_prompt", "") + bbox_prompt+ doc["question"] + "\n" + options_string
     return prompt
 
 
+COLOR_PALETTE = ["red", "blue", "green", "yellow", "purple", "orange", "cyan", "magenta"]
+
 def embspatial_doc_to_visual(doc: dict) -> list:
-    return [doc["image"].convert("RGB")]
+    image = doc["image"].convert("RGB")
+    EMBSPATIAL_BBOX_OVERLAY = os.getenv("EMBSPATIAL_BBOX_OVERLAY", "0").lower() == "1"
+
+    if EMBSPATIAL_BBOX_OVERLAY:
+        bboxes = doc["objects"]
+        # {
+        # "bbox": [[221,0,419,112],
+        # [1,43,227,95],
+        # [224,116,129,53],
+        # [358,170,282,310]],
+        # "name": ["banister","chest","table","stairs"]
+        # }
+
+        assert len(bboxes["bbox"]) == len(bboxes["name"]), "Number of bounding boxes and names must match."
+
+        # Draw bounding boxes on the image
+        draw = ImageDraw.Draw(image)
+        for i, bbox in enumerate(bboxes["bbox"]):
+            bbox_xy = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+            draw.rectangle(bbox_xy, outline=COLOR_PALETTE[i % len(COLOR_PALETTE)])
+
+        # # Convert the image back to RGB and return as a list
+        # image = draw.im.getimage()
+
+    return [image]
 
 
 DATA_SOURCES = ["ai2thor", "mp3d", "scannet"]

@@ -25,6 +25,7 @@ from lmms_eval.models.simple.qwen3_vl_experiments import (
     _save_experiment_artifacts,
     _images_to_uint8_video,
     _doc_images_to_uint8_video,
+    _collect_doc_extra_artifact_visuals,
     _to_uint8_video,
     _estimate_video_fps,
 )
@@ -412,6 +413,14 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                             task_name = (doc.get("Task") or "").strip()
                             task_type = task_name.lower().replace(" ", "_").replace("&", "and") if task_name else None
 
+                    
+                    if doc.get("category") is not None:
+                        task_type = doc.get("category")
+                    if doc.get("qtype") is not None:
+                        q_type = doc.get("qtype").split('_')
+                        relation = doc.get("relation").split(' ')
+                        task_type = '_'.join(q_type + relation)
+                    
                     metadata = {
                         "model": "qwen3_vl_experiments_chat",
                         "timestamp": now,
@@ -420,7 +429,7 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         "doc_id": int(doc_id[b]),
                         "prompt_rendered": texts[b] if b < len(texts) else None,
                         "answer": answers[b] if b < len(answers) else None,
-                        "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("Answer") if isinstance(doc, dict) else None,
+                        "ground_truth": doc.get("ground_truth") if isinstance(doc, dict) and doc.get("ground_truth") is not None else doc.get("Answer") if doc.get("Answer") is not None else doc.get("answer") if isinstance(doc, dict) else None,
                         "question_type": task_type,
                         "question_text": question_text,
                         "question_words": question_words,
@@ -438,6 +447,7 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                         "attn_h": int(attn_map_thw.shape[1]) if attn_map_thw is not None else None,
                         "attn_w": int(attn_map_thw.shape[2]) if attn_map_thw is not None else None,
                     }
+                    extra_visuals = _collect_doc_extra_artifact_visuals(doc)
                     task_save = False
                     # Also save split by task type (STI/VSI Bench)
                     if task_type:
@@ -450,6 +460,7 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                             metadata,
                             save_mp4=save_mp4,
                             save_npz=save_npz,
+                            extra_visuals=extra_visuals,
                         )
                         task_save = True
 
@@ -473,6 +484,7 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                                     metadata,
                                     save_mp4=save_mp4,
                                     save_npz=save_npz,
+                                    extra_visuals=extra_visuals,
                                 )
                     
                     if not task_save:
@@ -485,6 +497,7 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                             metadata,
                             save_mp4=save_mp4,
                             save_npz=save_npz,
+                            extra_visuals=extra_visuals,
                         )
                             
             pbar.update(1)

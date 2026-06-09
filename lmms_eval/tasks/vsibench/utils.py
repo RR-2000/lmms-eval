@@ -99,7 +99,7 @@ def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     
     if LOC_TEXT and ("object_rel" in doc["question_type"] or doc["question_type"] in ["obj_appearance_order", "object_counting", "object_size_estimation"]):
         vid_path = vsibench_doc_to_visual(doc)[0]
-        width, height = path_to_resolution(vid_path)
+        width, height = 1,1 # path_to_resolution(vid_path)
         vid_path = vid_path.replace(".mp4", "/")
         objects = sorted(os.listdir(vid_path))
         obj_names = [obj.replace('.json', '').replace('bboxes_', '') for obj in objects]
@@ -110,7 +110,7 @@ def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
         pre_prompt += (
             f" The video contains the following objects: {', '.join(obj_names)}. "
             "Each object may have bounding box annotations for each frame, given in the "
-            "format: "
+            "format (coordinates are in fractions of dimensions): "
             "time:[<object_name>[x_min, y_min, x_max, y_max], "
             "<object_name>[x_min, y_min, x_max, y_max]].\n"
         )
@@ -136,7 +136,7 @@ def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
 
                 for bbox_idx, bbox_i in enumerate(bbox):
                     frame_entries.append(
-                        f"{obj}_{bbox_idx+1}[{bbox_i[0]*width:.2f}, {bbox_i[1]*height:.2f}, {bbox_i[2]*width:.2f}, {bbox_i[3]*height:.2f}]"
+                        f"{obj}_{bbox_idx+1}[{bbox_i[0]*width:.2f}, {bbox_i[1]*height:.2f}, {(bbox_i[0]+bbox_i[2])*width:.2f}, {(bbox_i[1] + bbox_i[3])*height:.2f}]"
                     )
             if len(frame_entries) > 0:
                 pre_prompt += f" At time {time:.2f}s:[{', '.join(frame_entries)}]\n"
@@ -195,8 +195,8 @@ def to_float(pred):
 
 def vsibench_process_results(doc, results):
     doc["prediction"] = results[0]
-    # print(results[0])
-    # exit()
+    print(results[0])
+    
     if doc["question_type"] in MCA_QUESTION_TYPES:
         for key, value in METRICS_FOR_MCA.items():
             doc[key] = eval(value)(fuzzy_matching(doc["prediction"]), doc["ground_truth"])
