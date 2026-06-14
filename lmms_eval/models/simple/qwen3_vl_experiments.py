@@ -14,6 +14,8 @@ import torch
 from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
 from PIL import Image
+from PIL import ImageDraw
+from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer
 
@@ -211,6 +213,17 @@ def _collect_doc_extra_artifact_visuals(doc: Optional[dict]) -> dict[str, np.nda
 
     visuals: dict[str, np.ndarray] = {}
 
+
+    def _parse_json_maybe(value):
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    return value
+        return value
+
     base_candidates = [
         doc.get("resolved_img_path"),
         doc.get("img_path"),
@@ -218,6 +231,20 @@ def _collect_doc_extra_artifact_visuals(doc: Optional[dict]) -> dict[str, np.nda
     ]
     for candidate in base_candidates:
         video = _image_like_to_uint8_video(candidate)
+        # if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["2", "3"]:
+        #     # Draw GT bounding boxes on the image for help
+        #     gt_answer = doc.get(doc.get("answer", ""))
+        #     gt_bbox = _parse_json_maybe(doc.get("bboxes_by_item", "")).get(gt_answer, {}).get("0", [])
+        #     gt_bbox_color = _parse_json_maybe(doc.get("bbox_colors_by_item", "")).get(gt_answer, {}).get("name", "red")
+        #     if gt_bbox:
+        #         video = Image.fromarray(video)
+        #         for box in gt_bbox:
+        #             if len(box) != 4:
+        #                 continue
+        #             x, y, w, h = box
+        #             draw = ImageDraw.Draw(video)
+        #             draw.rectangle([x, y, x + w, y + h], outline=gt_bbox_color, width=3)
+        #         video
         if video is not None:
             visuals["base_image"] = video
             break

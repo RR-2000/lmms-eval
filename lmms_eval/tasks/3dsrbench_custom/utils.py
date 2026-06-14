@@ -11,6 +11,8 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 from PIL import Image
+from PIL import ImageDraw
+from pathlib import Path
 from loguru import logger as eval_logger
 
 # Category mapping from detailed categories to main categories
@@ -63,6 +65,38 @@ def _normalize_text(text) -> str:
     return " ".join(str(text).strip().lower().split())
 
 
+def _get_valid_boxes(boxes) -> list[list[float]]:
+    if not isinstance(boxes, list):
+        return []
+    return [box for box in boxes if isinstance(box, list) and len(box) == 4]
+
+
+def _get_all_items_bbox_entries(doc) -> list[tuple[str, list[list[float]], str]]:
+    bbox_data = _parse_json_maybe(doc.get("bboxes_by_item", {}))
+    if not isinstance(bbox_data, dict) or not bbox_data:
+        return []
+
+    color_data = _parse_json_maybe(doc.get("bbox_colors_by_item", {}))
+    entries = []
+    for item_name, frame_map in bbox_data.items():
+        frame_map = _parse_json_maybe(frame_map)
+        if not isinstance(frame_map, dict):
+            return []
+        boxes = _get_valid_boxes(frame_map.get("0", []))
+        if not boxes:
+            return []
+
+        color_name = DEFAULT_COLOR_ORDER[len(entries) % len(DEFAULT_COLOR_ORDER)]
+        if isinstance(color_data, dict):
+            item_color = _parse_json_maybe(color_data.get(item_name, {}))
+            if isinstance(item_color, dict) and item_color.get("name"):
+                color_name = item_color["name"]
+
+        entries.append((item_name, boxes, color_name))
+
+    return entries
+
+
 def _load_image_from_doc(doc, use_overlay: bool = False):
     if "image" in doc and hasattr(doc["image"], "convert"):
         return doc["image"].convert("RGB")
@@ -77,15 +111,53 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
             doc.get("image"),
         ]
     )
+    # if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["2", "3"]:
+    #     for path_idx in range(len(path_candidates)):
+    #         path_candidates[path_idx] = path_candidates[path_idx].replace("3DSR_fixed", "3DSR")
     for image_path in path_candidates:
-        if image_path:
-            # debug save IMG
+        if os.path.isfile(image_path):
+            drawn = False
             img = Image.open(image_path).convert("RGB")
+            gt_answer = None
+            gt_bbox = []
+            gt_bbox_color = "red"
+            if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["2", "3"]:
+                # Draw GT bounding boxes on the image for help
+                gt_answer = doc.get(doc.get("answer", ""))
+                gt_bbox = _parse_json_maybe(doc.get("bboxes_by_item", "")).get(gt_answer, {}).get("0", [])
+                gt_bbox_color = _parse_json_maybe(doc.get("bbox_colors_by_item", "")).get(gt_answer, {}).get("name", "red")
+                if gt_bbox:
+                    draw = ImageDraw.Draw(img)
+                    width, height = img.size
+                    for box in gt_bbox:
+                        if len(box) != 4:
+                            continue
+                        x, y, w, h = box
+                        draw.rectangle([x*width, y*height, (x + w)*width, (y + h)*height], outline=gt_bbox_color, width=3)
+                        drawn = True
+            if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["5", "6"]:
+                bbox_entries = _get_all_items_bbox_entries(doc)
+                if bbox_entries:
+                    draw = ImageDraw.Draw(img)
+                    width, height = img.size
+                    for _, boxes, box_color in bbox_entries:
+                        for box in boxes:
+                            x, y, w, h = box
+                            draw.rectangle([x*width, y*height, (x + w)*width, (y + h)*height], outline=box_color, width=3)
+                            drawn = True
+            # Save image for debugging
+            
+            if "flip" in str(doc.get("index")):
+                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            
             if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
                 img = Image.fromarray(np.array(img) * 0)
-            # dir = "./test/3dsr"
-            # os.makedirs(dir, exists_ok=true)
-            # img.save(f'{dir}/{image_path.split("/")[-1]}')
+            
+            save_path = os.path.join(os.getenv("LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR"), "TMP_IMGS", f"{doc.get('qid', doc.get('index', 'unknown'))}.png")
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            img.save(save_path)
+            if drawn:
+                print(f"Debug: Drew bbox overlays on image for doc_id={doc.get('index')} at {save_path}")
             return img
     raise FileNotFoundError("No image path found in document.")
 
@@ -110,20 +182,56 @@ def _build_fallback_question(doc) -> str:
     object2 = doc.get("object2", doc.get("object_2"))
 
     templates = {
-        ("height", "higher"): f"Which object is higher in the image: {subject} or {object1}?",
-        ("location", "above"): f"Is {subject} above {object1}?",
-        ("location", "closer to camera"): f"Which object is closer to the camera: {subject} or {object1}?",
-        ("location", "next to"): f"Is {subject} next to {object1}?",
-        ("orientation", "in front of"): f"Is {subject} in front of {object1}?",
-        ("orientation", "on the left"): f"Is {subject} on the left of {object1}?",
-        ("orientation", "viewpoint"): f"From the camera's viewpoint, which direction is {subject} facing?",
+        ("height", "higher"): f"Consider the real-world 3D location of the objects. Which object is higher in the image: {subject} or {object1}?",
+        ("location", "above"): f"Consider the real-world 3D location of the objects. Is {object1} above {subject}?",
+        ("location", "closer to camera"): f"Consider the real-world 3D location of the objects. Which object is closer to the camera: {subject} or {object1}?",
+        ("location", "next to"): f"Consider the real-world 3D location of the objects. Is {subject} next to {object1}?",
+        ("orientation", "in front of"): f"From {object1}'s perspective, is {subject} in front of {object1}?",
+        ("orientation", "on the left"): f"From {object1}'s perspective, is {subject} on the left of {object1}?",
+        ("orientation", "viewpoint"): f"From the camera's viewpoint, which direction of {subject} is facing the camera?",
         ("multi_object", "closer to"): f"Which object is {subject} closer to: {object1} or {object2}?",
         ("multi_object", "facing"): f"Which object is {subject} facing: {object1} or {object2}?",
         ("multi_object", "parallel"): f"Is {subject} parallel to {object1}?",
         ("multi_object", "same direction"): f"Are {subject} and {object1} facing the same direction?",
-        ("multi_object", "viewpoint towards object"): f"Relative to its current viewpoint, which direction should {subject} turn to face {object1}?",
+        ("multi_object", "viewpoint towards object"): f"Relative to its current viewpoint, which direction should {object1} turn to face {subject}?",
     }
     return templates.get((qtype, relation), f"What is the correct answer about {subject}?")
+
+
+def _build_text_only_position_hint(doc, gt) -> str:
+    qtype = _normalize_text(doc.get("qtype", ""))
+    relation = _normalize_text(doc.get("relation", ""))
+    subject = doc.get("subject")
+    object1 = doc.get("object1", doc.get("object_1"))
+    object2 = doc.get("object2", doc.get("object_2"))
+
+    hints = {
+        ("height", "higher"): f"The {gt} is {'higher' if 'higher' in str(doc.get('original_question', '')) else 'lower'}.",
+        # f"Determine the relative vertical positions of {subject} and {object1}, then answer which one is higher in the image.",
+        ("location", "above"): f"The {subject} is directly {'above' if 'above' in str(doc.get('original_question', '')) else 'underneath'} {object1}." if gt == "yes" else f"The {subject} is not directly {'above' if 'above' in str(doc.get('original_question', '')) else 'underneath'} {object1}.",
+        # f"Determine whether {subject} is vertically positioned above {object1} in the image.",
+        ("location", "closer to camera"): f"The {gt} is closer to the camera." if "closer to the camera" in str(doc.get('original_question', '')) else f"The {gt} is farther from the camera.",
+        # f"Determine the relative depth of {subject} and {object1}, then answer which object is closer to the camera.",
+        ("location", "next to"): f"The {subject} is far from {object1}." if gt == 'far away from each other' else f"The {subject} is close to {object1}.",
+        # f"Determine whether {subject} is positioned adjacent to {object1} in the image.",
+        ("orientation", "in front of"): f"The {subject} is in front of {object1} from {object1}'s perspective." if gt == 'in front of' else f"The {subject} is behind {object1} from {object1}'s perspective.",
+        # f"Determine the relative front-back positions of {subject} and {object1}, then answer whether {subject} is in front of {object1}.",
+        ("orientation", "on the left"): f"The {subject} is on the left of {object1} from {object1}'s perspective." if gt == 'on the left' else f"The {subject} is on the right of {object1} from {object1}'s perspective.",
+        # f"Determine the relative left-right positions of {subject} and {object1}, then answer whether {subject} is on the left of {object1}.",
+        ("orientation", "viewpoint"): f"The {subject}'s {gt} side is facing the camera.",
+        # f"Determine the viewing direction of {subject} relative to the camera viewpoint, then answer which direction it is facing.",
+        ("multi_object", "closer to"): f"The {gt} is closer to {subject}.",
+        # f"Determine the relative distances from {subject} to {object1} and {object2}, then answer which object {subject} is closer to.",
+        ("multi_object", "facing"): f"The {subject} is facing {gt}.",
+        # f"Determine whether {subject} is oriented toward {object1} or toward {object2}, then answer which object it is facing.",
+        ("multi_object", "parallel"): f"The {subject} and {object1} are parallel." if gt == 'parallel' else f"The {subject} and {object1} are perpendicular.",
+        # f"Determine the relative orientations of {subject} and {object1}, then answer whether they are parallel.",
+        ("multi_object", "same direction"): f"The {subject} and {object1} are facing the same direction." if gt == 'same or similar directions' else f"The {subject} and {object1} are facing different directions.",
+        # f"Determine the relative orientations of {subject} and {object1}, then answer whether they are facing the same direction.",
+        ("multi_object", "viewpoint towards object"): f"The {subject}'s {gt} side is facing the {object1}",
+        # f"Determine the relative position of {object1} from {subject}'s current viewpoint, then answer which direction {subject} should turn to face {object1}.",
+    }
+    return hints.get((qtype, relation), f"Determine the relevant relative position or orientation involving {subject} before answering.")
 
 
 def _build_options(doc) -> dict[str, str]:
@@ -230,31 +338,62 @@ def _get_color_idx(box_text, answer):
             return idx
     return None
 
+
+def _format_bbox_dimensions_prompt(doc) -> str:
+    bbox_entries = _get_all_items_bbox_entries(doc)
+    if not bbox_entries:
+        return ""
+
+    prompt_lines = ["The queried objects have the following bounding box(es):"]
+    for item_name, boxes, _ in bbox_entries:
+        formatted_boxes = []
+        for box_idx, (x, y, w, h) in enumerate(boxes, start=1):
+            formatted_boxes.append(f"{box_idx}[{x:.2f}, {y:.2f}, {x + w:.2f}, {y + h:.2f}]")
+        prompt_lines.append(f"{item_name}: {', '.join(formatted_boxes)}")
+    return "\n".join(prompt_lines)
+
+
+def _format_bbox_colors_prompt(doc) -> str:
+    bbox_entries = _get_all_items_bbox_entries(doc)
+    if not bbox_entries:
+        return ""
+
+    prompt_lines = ["The queried objects have bounding boxes with the following colors:"]
+    for item_name, _, color_name in bbox_entries:
+        prompt_lines.append(f"{item_name}: {color_name}")
+    return "\n".join(prompt_lines)
+
+
 def _build_GT_help(doc, options, answer_format) -> str:
 
-    assert answer_format in {"0", "1", "2", "3"}, "Invalid GT help format option"
+    assert answer_format in {"0", "1", "2", "3", "4", "5", "6"}, "Invalid GT help format option"
 
     gt_answer = doc.get("answer", "").strip()
+    
+    # Letter to term
+    if gt_answer in ['A', 'B', 'C', 'D']:
+        gt_answer = doc.get(gt_answer)
+        
     if gt_answer == "":
         return ""
     if answer_format == "1":
         return f"The correct answer is: {gt_answer}."
     
     elif answer_format == "2":
-        if len(options) == 4 or 'yes' in options.values():
+        if len(options) == 4 or 'yes' in options.values() or "next to each other" in options.values() or "in front of" in options.values() or "on the left" in options.values() or "parallel" in options.values() or "same or similar directions" in options.values():
             return ""
         gt_bboxes = _parse_json_maybe(doc.get("bboxes_by_item", ""))[gt_answer]["0"]
         
-        return_prompt = "The correct answer is the object with bounding box(es):"
+        return_prompt = ""
         for box_idx, box in enumerate(gt_bboxes, start=1):
             if len(box) != 4:
                 continue
             x, y, w, h = box
             return_prompt += f"{box_idx}[{x:.2f}, {y:.2f}, {x + w:.2f}, {y + h:.2f}] \n"
-        return return_prompt
+        return "The correct answer is the object with bounding box(es): " + return_prompt if return_prompt != "" else ""
     
     elif answer_format == "3":
-        if len(options) == 4 or 'yes' in options.values():
+        if len(options) == 4 or 'yes' in options.values() or "next to each other" in options.values() or "in front of" in options.values() or "on the left" in options.values() or "parallel" in options.values() or "same or similar directions" in options.values():
             return ""
         gt_bbox = _parse_json_maybe(doc.get("bboxes_by_item", ""))[gt_answer]["0"]
         # print(_parse_json_maybe(doc.get("bboxes_by_item", "")))
@@ -265,13 +404,32 @@ def _build_GT_help(doc, options, answer_format) -> str:
         if not gt_bbox:
             return ""
         
-        color_idx = _get_color_idx(doc.get("bboxes_by_item", ""), gt_answer)
-        if color_idx is None:
-            return ""
-        color = DEFAULT_COLOR_ORDER[color_idx % len(DEFAULT_COLOR_ORDER)]
+        # items = [
+        #     doc.get("subject"),
+        #     doc.get("object_1", doc.get("object1")),
+        #     doc.get("object_2", doc.get("object2")),
+        # ]
+        # gt_idx = -1
+        # for item in items:
+        #     if item and item in gt_answer:
+        #         gt_idx = items.index(item)
+        #         break
+        
+        # if gt_idx == -1:
+        #     return ""
+        
+        # color = DEFAULT_COLOR_ORDER[gt_idx % len(DEFAULT_COLOR_ORDER)]
+        color = gt_bbox = _parse_json_maybe(doc.get("bbox_colors_by_item", ""))[gt_answer]["name"]
         
         return f"The correct answer is the object with bounding box in the color: {color}."
-    
+    elif answer_format == "4":
+        return _build_text_only_position_hint(doc, gt_answer)
+    elif answer_format == "5":
+        # Only prints bbox dimensions if all items have bboxes, to avoid giving partial hints
+        return _format_bbox_dimensions_prompt(doc)
+    elif answer_format == "6":
+        # Only prints bboxes colors if all items have bboxes, to avoid giving partial hints
+        return _format_bbox_colors_prompt(doc)
     
     return ""
 
@@ -290,13 +448,13 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
     post_prompt = lmms_eval_specific_kwargs.get(
         "post_prompt",
-        "Please select the correct answer from the options above. \n",
+        "Please select the correct answer from the options above and include the Option letter (A, B, C, D). \n",
     )
 
     bbox_context = _format_bbox_context(doc)
-    question = doc.get("question") or _build_fallback_question(doc)
+    question = doc.get("original_question") or _build_fallback_question(doc)
     options = _build_options(doc)
-    if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["1", "2", "3"]:
+    if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["1", "2", "3", "4", "5", "6"]:
         gt_help = _build_GT_help(doc, options, os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0"))
         if gt_help:
             post_prompt = gt_help + "\n" + post_prompt

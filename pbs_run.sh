@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-3DSR_GT_2
+#PBS -N lmms-3DSR_GT_0_Blank
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml03
 
 # Activate the Conda environment
@@ -27,17 +27,17 @@ conda activate lmms
 # 3dsrbench_parquet
 # embspatial
 
-LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_2 LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
+LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
-LMMS_MASK_IMAGE=0 \
-LMMS_EVAL_INCLUDE_GT_HELP_TEXT=2 \
+LMMS_MASK_IMAGE=1 \
+LMMS_EVAL_INCLUDE_GT_HELP_TEXT=0 \
   python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
   --tasks 3dsrbench_parquet \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_2
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_0_Blank
 
 
 # Set LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1
