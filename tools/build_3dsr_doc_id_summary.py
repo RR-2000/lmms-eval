@@ -122,7 +122,7 @@ def is_correct_sample(data: dict[str, object]) -> bool | None:
     if ground_truth.lower().strip('.') in answer.lower() or ground_truth[0] == data.get("answer")[0]:
         return True
     
-    print(f"Debug: doc_id={data.get('doc_id')}, answer='{answer}', raw_answer='{data.get('answer')}', ground_truth='{ground_truth}' - Marking as incorrect: {ground_truth[0]} != {data.get('answer')[0]}")
+    # print(f"Debug: doc_id={data.get('doc_id')}, answer='{answer}', raw_answer='{data.get('answer')}', ground_truth='{ground_truth}' - Marking as incorrect: {ground_truth[0]} != {data.get('answer')[0]}")
         
     return False
 

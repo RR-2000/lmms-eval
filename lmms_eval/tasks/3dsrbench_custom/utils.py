@@ -129,6 +129,7 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
                 if gt_bbox:
                     draw = ImageDraw.Draw(img)
                     width, height = img.size
+                    # print(f'DEBUG: GT {doc.get("index")} bboxes {doc.get("qtype")}_{doc.get("relation")} for answer: "{gt_answer}": {gt_bbox}')
                     for box in gt_bbox:
                         if len(box) != 4:
                             continue
@@ -153,11 +154,12 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
             if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
                 img = Image.fromarray(np.array(img) * 0)
             
-            save_path = os.path.join(os.getenv("LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR"), "TMP_IMGS", f"{doc.get('qid', doc.get('index', 'unknown'))}.png")
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            img.save(save_path)
-            if drawn:
-                print(f"Debug: Drew bbox overlays on image for doc_id={doc.get('index')} at {save_path}")
+            if os.getenv("LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR", ""):
+                save_path = os.path.join(os.getenv("LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR"), "TMP_IMGS", f"{doc.get('qid', doc.get('index', 'unknown'))}.png")
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                img.save(save_path)
+                if drawn:
+                    print(f"Debug: Drew bbox overlays on image for doc_id={doc.get('index')} at {save_path}")
             return img
     raise FileNotFoundError("No image path found in document.")
 
@@ -344,11 +346,15 @@ def _format_bbox_dimensions_prompt(doc) -> str:
     if not bbox_entries:
         return ""
 
+    # img = _load_image_from_doc(doc, use_overlay=False)
+    image_width, image_height = 1000, 1000 #img.size
+
     prompt_lines = ["The queried objects have the following bounding box(es):"]
     for item_name, boxes, _ in bbox_entries:
         formatted_boxes = []
         for box_idx, (x, y, w, h) in enumerate(boxes, start=1):
-            formatted_boxes.append(f"{box_idx}[{x:.2f}, {y:.2f}, {x + w:.2f}, {y + h:.2f}]")
+            x1, y1, x2, y2 = int(x * image_width), int(y * image_height), int((x + w) * image_width), int((y + h) * image_height)
+            formatted_boxes.append(f"{box_idx}[{x1}, {y1}, {x2}, {y2}]")
         prompt_lines.append(f"{item_name}: {', '.join(formatted_boxes)}")
     return "\n".join(prompt_lines)
 
@@ -380,7 +386,7 @@ def _build_GT_help(doc, options, answer_format) -> str:
         return f"The correct answer is: {gt_answer}."
     
     elif answer_format == "2":
-        if len(options) == 4 or 'yes' in options.values() or "next to each other" in options.values() or "in front of" in options.values() or "on the left" in options.values() or "parallel" in options.values() or "same or similar directions" in options.values():
+        if gt_answer not in _parse_json_maybe(doc.get("bboxes_by_item", "")):
             return ""
         gt_bboxes = _parse_json_maybe(doc.get("bboxes_by_item", ""))[gt_answer]["0"]
         
@@ -388,12 +394,15 @@ def _build_GT_help(doc, options, answer_format) -> str:
         for box_idx, box in enumerate(gt_bboxes, start=1):
             if len(box) != 4:
                 continue
+            # img = _load_image_from_doc(doc, use_overlay=False)
+            image_width, image_height = 1000, 1000#img.size
             x, y, w, h = box
-            return_prompt += f"{box_idx}[{x:.2f}, {y:.2f}, {x + w:.2f}, {y + h:.2f}] \n"
+            x1, y1, x2, y2 = int(x * image_width), int(y * image_height), int((x + w) * image_width), int((y + h) * image_height)
+            return_prompt += f"{box_idx}[{x1}, {y1}, {x2}, {y2}] \n"
         return "The correct answer is the object with bounding box(es): " + return_prompt if return_prompt != "" else ""
     
     elif answer_format == "3":
-        if len(options) == 4 or 'yes' in options.values() or "next to each other" in options.values() or "in front of" in options.values() or "on the left" in options.values() or "parallel" in options.values() or "same or similar directions" in options.values():
+        if gt_answer not in _parse_json_maybe(doc.get("bboxes_by_item", "")):
             return ""
         gt_bbox = _parse_json_maybe(doc.get("bboxes_by_item", ""))[gt_answer]["0"]
         # print(_parse_json_maybe(doc.get("bboxes_by_item", "")))
