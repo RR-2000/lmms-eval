@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-Synth_Int3_5
+#PBS -N lmms-Synth_Q3
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml03
 
 # Activate the Conda environment
@@ -19,8 +19,8 @@ nvidia-smi
 # internvl3_5, OpenGVLab/InternVL3_5-4B
 # transformers=5.5.4, transformers<5
 
-model=qwen2_5_vl
-model_weights=rayruiyang/VST-7B-RL
+model=qwen3_vl_experiments
+model_weights=Qwen/Qwen3-VL-4B-Instruct
 task=kubric_movi_a #3dsrbench_parquet, kubric_movi_a
 conda activate lmms
 

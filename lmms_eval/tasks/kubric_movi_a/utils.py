@@ -349,8 +349,6 @@ def _draw_bbox_overlays(doc, img: Image.Image) -> Image.Image:
         color = _get_overlay_color_name(obj.get("color_name", "red"))
         draw.rectangle(bbox, outline=color, width=3)
 
-    if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
-        img = Image.fromarray(np.array(img) * 0)
     return img
 
 
@@ -360,6 +358,8 @@ def doc_to_visual(doc):
         image = _load_image(doc.get("img_path"))
     if image is None:
         raise FileNotFoundError(f"No usable image found for sample {doc.get('index', doc.get('qid', 'unknown'))}")
+    if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
+        image = Image.fromarray(np.array(image) * 0)
     return [_draw_bbox_overlays(doc, image)]
 
 
