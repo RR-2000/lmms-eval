@@ -15,6 +15,8 @@ from PIL import ImageDraw
 from pathlib import Path
 from loguru import logger as eval_logger
 
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
+
 # Category mapping from detailed categories to main categories
 CATEGORY_MAPPING = {
     "height_higher": "height",
@@ -83,7 +85,8 @@ def _get_all_items_bbox_entries(doc) -> list[tuple[str, list[list[float]], str]]
         if not isinstance(frame_map, dict):
             return []
         boxes = _get_valid_boxes(frame_map.get("0", []))
-        if not boxes:
+        # if not boxes:
+        if len(boxes) != 0:
             return []
 
         color_name = DEFAULT_COLOR_ORDER[len(entries) % len(DEFAULT_COLOR_ORDER)]
@@ -126,7 +129,7 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
                 gt_answer = doc.get(doc.get("answer", ""))
                 gt_bbox = _parse_json_maybe(doc.get("bboxes_by_item", "")).get(gt_answer, {}).get("0", [])
                 gt_bbox_color = _parse_json_maybe(doc.get("bbox_colors_by_item", "")).get(gt_answer, {}).get("name", "red")
-                if gt_bbox:
+                if len(gt_bbox) == 1:
                     draw = ImageDraw.Draw(img)
                     width, height = img.size
                     # print(f'DEBUG: GT {doc.get("index")} bboxes {doc.get("qtype")}_{doc.get("relation")} for answer: "{gt_answer}": {gt_bbox}')
@@ -160,6 +163,9 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
                 img.save(save_path)
                 if drawn:
                     print(f"Debug: Drew bbox overlays on image for doc_id={doc.get('index')} at {save_path}")
+            
+            if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
+                return None
             return img
     raise FileNotFoundError("No image path found in document.")
 
@@ -353,10 +359,89 @@ def _format_bbox_dimensions_prompt(doc) -> str:
     for item_name, boxes, _ in bbox_entries:
         formatted_boxes = []
         for box_idx, (x, y, w, h) in enumerate(boxes, start=1):
+            if "flip" in str(doc.get("index")):
+                x = 1 - (x + w)
+                w = 1 - x - w
             x1, y1, x2, y2 = int(x * image_width), int(y * image_height), int((x + w) * image_width), int((y + h) * image_height)
             formatted_boxes.append(f"{box_idx}[{x1}, {y1}, {x2}, {y2}]")
         prompt_lines.append(f"{item_name}: {', '.join(formatted_boxes)}")
     return "\n".join(prompt_lines)
+
+def _format_centroids_prompt(doc) -> str:
+    bbox_entries = _get_all_items_bbox_entries(doc)
+    if not bbox_entries:
+        return ""
+
+    # img = _load_image_from_doc(doc, use_overlay=False)
+    image_width, image_height = 1000, 1000 #img.size
+
+    prompt_lines = ["The queried objects have the following bounding box(es):"]
+    for item_name, boxes, _ in bbox_entries:
+        formatted_boxes = []
+        for box_idx, (x, y, w, h) in enumerate(boxes, start=1):
+            x1, y1, x2, y2 = int(x * image_width), int(y * image_height), int((x + w) * image_width), int((y + h) * image_height)
+            formatted_boxes.append(f"{box_idx}[{(x1+x2)//2}, {(y1+y2)//2}]")
+        prompt_lines.append(f"{item_name}: {', '.join(formatted_boxes)}")
+    return "\n".join(prompt_lines)
+
+
+def _build_bbox_prompt(doc, lmms_eval_specific_kwargs=None) -> str:
+    if lmms_eval_specific_kwargs is None:
+        lmms_eval_specific_kwargs = {}
+
+    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
+    post_prompt = lmms_eval_specific_kwargs.get(
+        "post_prompt",
+        "Answer the above in the bbox format: [x_min, y_min, x_max, y_max]. Each in the range [0, 1000].\n",
+    )
+    items = doc.get("bbox_items", [])
+
+    prompt = pre_prompt
+    question = doc.get("question") or doc.get("original_question") or _build_fallback_question(doc)
+    if prompt and not prompt.endswith("\n"):
+        prompt += "\n"
+    prompt += f"Question: {question}\n"
+
+    if items:
+        prompt += "Look at the image and find the bbox(es) of:\n"
+        for idx, item in enumerate(items, start=1):
+            prompt += f"{idx}. {item}\n"
+        prompt += "\n"
+
+    prompt += post_prompt
+    return prompt
+
+
+def _format_gt_bbox_answers(doc) -> dict[str, list[list[int]]]:
+    bbox_data = _parse_json_maybe(doc.get("bboxes_by_item", {}))
+    if not isinstance(bbox_data, dict):
+        return {}
+
+    item_names = doc.get("bbox_items") or list(bbox_data.keys())
+    image_width, image_height = 1000, 1000
+    is_flip = "flip" in str(doc.get("index", doc.get("qid", "")))
+
+    formatted_answers = {}
+    for item_name in item_names:
+        frame_map = _parse_json_maybe(bbox_data.get(item_name, {}))
+        if not isinstance(frame_map, dict):
+            formatted_answers[item_name] = []
+            continue
+
+        boxes = _get_valid_boxes(frame_map.get("0", []))
+        formatted_boxes = []
+        for x, y, w, h in boxes:
+            if is_flip:
+                x = 1 - (x + w)
+            x1 = int(x * image_width)
+            y1 = int(y * image_height)
+            x2 = int((x + w) * image_width)
+            y2 = int((y + h) * image_height)
+            formatted_boxes.append([x1, y1, x2, y2])
+
+        formatted_answers[item_name] = formatted_boxes
+
+    return formatted_answers
 
 
 def _format_bbox_colors_prompt(doc) -> str:
@@ -372,7 +457,7 @@ def _format_bbox_colors_prompt(doc) -> str:
 
 def _build_GT_help(doc, options, answer_format) -> str:
 
-    assert answer_format in {"0", "1", "2", "3", "4", "5", "6"}, "Invalid GT help format option"
+    assert answer_format in {"0", "1", "2", "3", "4", "5", "6", "7", "8"}, "Invalid GT help format option"
 
     gt_answer = doc.get("answer", "").strip()
     
@@ -391,12 +476,18 @@ def _build_GT_help(doc, options, answer_format) -> str:
         gt_bboxes = _parse_json_maybe(doc.get("bboxes_by_item", ""))[gt_answer]["0"]
         
         return_prompt = ""
+        if len(gt_bboxes) != 1:
+            return ""
         for box_idx, box in enumerate(gt_bboxes, start=1):
             if len(box) != 4:
                 continue
             # img = _load_image_from_doc(doc, use_overlay=False)
             image_width, image_height = 1000, 1000#img.size
             x, y, w, h = box
+            if "flip" in str(doc.get("index")):
+                x = 1 - (x + w)
+                w = 1 - x - w
+            
             x1, y1, x2, y2 = int(x * image_width), int(y * image_height), int((x + w) * image_width), int((y + h) * image_height)
             return_prompt += f"{box_idx}[{x1}, {y1}, {x2}, {y2}] \n"
         return "The correct answer is the object with bounding box(es): " + return_prompt if return_prompt != "" else ""
@@ -410,7 +501,8 @@ def _build_GT_help(doc, options, answer_format) -> str:
         # print(gt_bbox)
         # print()
 
-        if not gt_bbox:
+        # if not gt_bbox:
+        if len(gt_bbox) != 1:
             return ""
         
         # items = [
@@ -439,6 +531,27 @@ def _build_GT_help(doc, options, answer_format) -> str:
     elif answer_format == "6":
         # Only prints bboxes colors if all items have bboxes, to avoid giving partial hints
         return _format_bbox_colors_prompt(doc)
+    elif answer_format == "7":
+        # Provides the center point of the GT bbox as a hint
+        if gt_answer not in _parse_json_maybe(doc.get("bboxes_by_item", "")):
+            return ""
+        gt_bboxes = _parse_json_maybe(doc.get("bboxes_by_item", ""))[gt_answer]["0"]
+        
+        return_prompt = ""
+        for box_idx, box in enumerate(gt_bboxes, start=1):
+            if len(box) != 4:
+                continue
+            # img = _load_image_from_doc(doc, use_overlay=False)
+            image_width, image_height = 1000, 1000#img.size
+            x, y, w, h = box
+            x1, y1, x2, y2 = int(x * image_width), int(y * image_height), int((x + w) * image_width), int((y + h) * image_height)
+            return_prompt += f"{box_idx}[{ (x1 + x2) // 2 }, { (y1 + y2) // 2 }] \n"
+        return "The correct answer is the object(s) at: " + return_prompt if return_prompt != "" else ""
+    elif answer_format == "8":
+        # Provides centrois for all items
+        return _format_centroids_prompt(doc)
+
+    
     
     return ""
 
@@ -447,7 +560,26 @@ def doc_to_visual(doc):
 
 
 def bbox_doc_to_visual(doc):
-    return [_load_image_from_doc(doc, use_overlay=True)]
+    if "image" in doc and hasattr(doc["image"], "convert"):
+        return [doc["image"].convert("RGB")]
+
+    path_candidates = []
+    path_candidates.extend(
+        [
+            doc.get("resolved_img_path"),
+            doc.get("img_path"),
+            doc.get("image"),
+        ]
+    )
+
+    for image_path in path_candidates:
+        if os.path.isfile(image_path):
+            img = Image.open(image_path).convert("RGB")
+            if "flip" in str(doc.get("index")):
+                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            return [img]
+
+    return [_load_image_from_doc(doc, use_overlay=False)]
 
 
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
@@ -463,7 +595,7 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     bbox_context = _format_bbox_context(doc)
     question = doc.get("original_question") or _build_fallback_question(doc)
     options = _build_options(doc)
-    if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["1", "2", "3", "4", "5", "6"]:
+    if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["1", "2", "3", "4", "5", "6", "7", "8"]:
         gt_help = _build_GT_help(doc, options, os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0"))
         if gt_help:
             post_prompt = gt_help + "\n" + post_prompt
@@ -487,14 +619,7 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
 
 
 def bbox_doc_to_text(doc, lmms_eval_specific_kwargs=None):
-    if lmms_eval_specific_kwargs is None:
-        lmms_eval_specific_kwargs = {}
-    bbox_kwargs = dict(lmms_eval_specific_kwargs)
-    bbox_kwargs.setdefault(
-        "post_prompt",
-        "Some queried objects are highlighted with bounding boxes. Please select the correct answer from the options above. \n",
-    )
-    return doc_to_text(doc, bbox_kwargs)
+    return _build_bbox_prompt(doc, lmms_eval_specific_kwargs)
 
 
 def doc_to_target(doc):
@@ -579,6 +704,28 @@ def process_results(doc, results):
         result_dict[f"{cat_name}_accuracy"] = base_entry
 
     return result_dict
+
+def bbox_process_results(doc, results):
+    pred = results[0].strip() if results else ""
+    index = doc.get("index", doc.get("qid"))
+    qid = doc.get("qid", index)
+    return {
+        "submission": {
+            "index": index,
+            "qid": qid,
+            "question_prompt": _build_bbox_prompt(doc),
+            "image_url": doc.get("image_url", doc.get("image")),
+            "gt_answers": _format_gt_bbox_answers(doc),
+            "model_answer": pred,
+        }
+    }
+
+
+def bbox_aggregate_results_for_submission(results, args):
+    path = generate_submission_file("3dsrbench_bbox_predictions.json", args)
+    with open(path, "w") as f:
+        json.dump(results, f, indent=2)
+    eval_logger.info(f"Results saved to {path}.")
 
 
 def aggregate_vanilla_accuracy(results):

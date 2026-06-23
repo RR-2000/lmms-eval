@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-3DSR_Int3_5
+#PBS -N lmms-Synth_Int3_5
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml03
 
 # Activate the Conda environment
@@ -19,34 +19,35 @@ nvidia-smi
 # internvl3_5, OpenGVLab/InternVL3_5-4B
 # transformers=5.5.4, transformers<5
 
-model=internvl3_5
-model_weights=OpenGVLab/InternVL3_5-4B
-conda activate lmms2
+model=qwen2_5_vl
+model_weights=rayruiyang/VST-7B-RL
+task=kubric_movi_a #3dsrbench_parquet, kubric_movi_a
+conda activate lmms
 
 # LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
-for gt_help_text in $(seq 0 6); do
+for gt_help_text in $(seq 0 8); do
   LMMS_MASK_IMAGE=0 \
   LMMS_EVAL_INCLUDE_GT_HELP_TEXT="${gt_help_text}" \
     python -m lmms_eval \
     --model $model \
     --model_args max_num_frames=32,pretrained="$model_weights" \
-    --tasks 3dsrbench_parquet \
+    --tasks $task \
     --batch_size 1 \
     --limit -1 \
-    --output_path "/home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_${gt_help_text}"
+    --output_path "/home/ramanathan/VLM/lmms-eval/outputs/${task}_GT_${gt_help_text}"
 
-  if [ $gt_help_text -eq 0 ] || [ $gt_help_text -eq 4 ]; then
+  if [ $gt_help_text -eq 0 ] || [ $gt_help_text -eq 1 ] || [ $gt_help_text -eq 4 ]; then
     # Also run with masked images for GT help text = 0
     LMMS_MASK_IMAGE=1 \
     LMMS_EVAL_INCLUDE_GT_HELP_TEXT="${gt_help_text}" \
       python -m lmms_eval \
       --model $model \
       --model_args max_num_frames=32,pretrained="$model_weights" \
-      --tasks 3dsrbench_parquet \
+      --tasks $task \
       --batch_size 1 \
       --limit -1 \
-      --output_path "/home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_${gt_help_text}_Blank"
+      --output_path "/home/ramanathan/VLM/lmms-eval/outputs/${task}_GT_${gt_help_text}_Blank"
   fi
 done
 

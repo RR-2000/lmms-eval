@@ -1,0 +1,19 @@
+dataset_name: null
+test_split: test
+task: "3dsrbench_bbox_pred"
+include: _default_template_yaml
+
+metric_list:
+  - metric: submission
+    aggregation: !function utils.bbox_aggregate_results_for_submission
+    higher_is_better: true
+
+doc_to_visual: !function utils.bbox_doc_to_visual
+doc_to_text: !function utils.bbox_doc_to_text
+process_results: !function utils.bbox_process_results
+
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: "Answer the above in the bbox format: [x_min, y_min, x_max, y_max]. Each in the range [0, 1000].\n"
