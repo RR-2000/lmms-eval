@@ -117,12 +117,11 @@ def is_correct_sample(data: dict[str, object]) -> bool | None:
     # if data.get("doc_id") == 0:
     #     print(f"Debug: doc_id=0, raw answer={data.get('answer')}, extracted answer={answer}")
     ground_truth = normalized_ground_truth(data.get("ground_truth"))
+    # print(f"Debug: doc_id={data.get('doc_id')}, answer='{answer}', raw_answer='{data.get('answer')}', ground_truth='{ground_truth}' - Marking as incorrect: {ground_truth[0]} != {data.get('answer')[0]}")
     if answer is None or ground_truth is None:
         return None
-    if ground_truth.lower().strip('.') in answer.lower() or ground_truth[0] == data.get("answer")[0]:
+    if (ground_truth.lower().strip('.') in answer.lower() and len(ground_truth) > 2) or ground_truth[0] == data.get("answer")[0]:
         return True
-    
-    # print(f"Debug: doc_id={data.get('doc_id')}, answer='{answer}', raw_answer='{data.get('answer')}', ground_truth='{ground_truth}' - Marking as incorrect: {ground_truth[0]} != {data.get('answer')[0]}")
         
     return False
 

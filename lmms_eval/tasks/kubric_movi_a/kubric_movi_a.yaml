@@ -1,0 +1,81 @@
+dataset_name: null
+test_split: test
+task: "kubric_movi_a"
+include: _default_template_yaml
+
+metric_list:
+  - metric: vanilla_accuracy
+    aggregation: !function utils.aggregate_vanilla_accuracy
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false
+  - metric: camera_relative_position_accuracy
+    aggregation: !function utils.aggregate_camera_relative_position_accuracy
+    higher_is_better: true
+  - metric: camera_distance_accuracy
+    aggregation: !function utils.aggregate_camera_distance_accuracy
+    higher_is_better: true
+  - metric: height_relative_3d_accuracy
+    aggregation: !function utils.aggregate_height_relative_3d_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_accuracy
+    higher_is_better: true
+  - metric: easy_accuracy
+    aggregation: !function utils.aggregate_easy_accuracy
+    higher_is_better: true
+  - metric: hard_accuracy
+    aggregation: !function utils.aggregate_hard_accuracy
+    higher_is_better: true
+  - metric: very_hard_accuracy
+    aggregation: !function utils.aggregate_very_hard_accuracy
+    higher_is_better: true
+  - metric: camera_relative_position_easy_accuracy
+    aggregation: !function utils.aggregate_camera_relative_position_easy_accuracy
+    higher_is_better: true
+  - metric: camera_relative_position_hard_accuracy
+    aggregation: !function utils.aggregate_camera_relative_position_hard_accuracy
+    higher_is_better: true
+  - metric: camera_relative_position_very_hard_accuracy
+    aggregation: !function utils.aggregate_camera_relative_position_very_hard_accuracy
+    higher_is_better: true
+  - metric: camera_distance_easy_accuracy
+    aggregation: !function utils.aggregate_camera_distance_easy_accuracy
+    higher_is_better: true
+  - metric: camera_distance_hard_accuracy
+    aggregation: !function utils.aggregate_camera_distance_hard_accuracy
+    higher_is_better: true
+  - metric: camera_distance_very_hard_accuracy
+    aggregation: !function utils.aggregate_camera_distance_very_hard_accuracy
+    higher_is_better: true
+  - metric: height_relative_3d_easy_accuracy
+    aggregation: !function utils.aggregate_height_relative_3d_easy_accuracy
+    higher_is_better: true
+  - metric: height_relative_3d_hard_accuracy
+    aggregation: !function utils.aggregate_height_relative_3d_hard_accuracy
+    higher_is_better: true
+  - metric: height_relative_3d_very_hard_accuracy
+    aggregation: !function utils.aggregate_height_relative_3d_very_hard_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_easy_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_easy_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_hard_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_hard_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_very_hard_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_very_hard_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_easy_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_easy_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_hard_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_hard_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_very_hard_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_very_hard_accuracy
+    higher_is_better: true
