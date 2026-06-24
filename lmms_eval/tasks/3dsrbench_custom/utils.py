@@ -16,6 +16,7 @@ from pathlib import Path
 from loguru import logger as eval_logger
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
+from lmms_eval.utils import sanitize_model_name
 
 # Category mapping from detailed categories to main categories
 CATEGORY_MAPPING = {
@@ -672,6 +673,10 @@ def process_results(doc, results):
     pred = results[0].strip()
     pred_answer = extract_answer(pred)
     gt_answer = _ground_truth_answer_letter(doc) or str(doc.get("answer", "")).strip()
+    gt_help_format = os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0")
+    gt_help_text = ""
+    if gt_help_format in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+        gt_help_text = _build_GT_help(doc, _build_options(doc), gt_help_format)
 
     score = 1.0 if pred_answer == gt_answer else 0.0
 
@@ -689,7 +694,22 @@ def process_results(doc, results):
         "main_category": main_category,
     }
 
+    submission_entry = {
+        "index": index,
+        "qid": qid,
+        "question_prompt": doc_to_text(doc),
+        "image_url": doc.get("image_url", doc.get("image")),
+        "gt_answer": gt_answer,
+        "gt_help_text": gt_help_text,
+        "model_answer": pred,
+        "pred_answer": pred_answer,
+        "score": score,
+        "category": category,
+        "main_category": main_category,
+    }
+
     result_dict = {
+        "submission": submission_entry,
         "vanilla_accuracy": base_entry,
         "flip_accuracy": base_entry,
         "circular_accuracy": base_entry,
@@ -704,6 +724,15 @@ def process_results(doc, results):
         result_dict[f"{cat_name}_accuracy"] = base_entry
 
     return result_dict
+
+
+def aggregate_results_for_submission(results, args):
+    model_tag = _get_submission_model_tag(args)
+    path = generate_submission_file(f"3dsrbench_predictions_{model_tag}.json", args)
+    with open(path, "w") as f:
+        json.dump(results, f, indent=2)
+    eval_logger.info(f"Results saved to {path}.")
+
 
 def bbox_process_results(doc, results):
     pred = results[0].strip() if results else ""
@@ -721,8 +750,23 @@ def bbox_process_results(doc, results):
     }
 
 
+def _get_submission_model_tag(args) -> str:
+    model_name = getattr(args, "model", "") or ""
+    if model_name:
+        return sanitize_model_name(model_name)
+
+    model_args = getattr(args, "model_args", "") or ""
+    for key in ("pretrained", "model_name", "model_path"):
+        match = re.search(rf"(?:^|,){key}=([^,]+)", model_args)
+        if match:
+            return sanitize_model_name(match.group(1).strip())
+
+    return "unknown_model"
+
+
 def bbox_aggregate_results_for_submission(results, args):
-    path = generate_submission_file("3dsrbench_bbox_predictions.json", args)
+    model_tag = _get_submission_model_tag(args)
+    path = generate_submission_file(f"3dsrbench_bbox_predictions_{model_tag}.json", args)
     with open(path, "w") as f:
         json.dump(results, f, indent=2)
     eval_logger.info(f"Results saved to {path}.")

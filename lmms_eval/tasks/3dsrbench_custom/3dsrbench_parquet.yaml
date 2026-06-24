@@ -4,6 +4,9 @@ task: "3dsrbench_parquet"
 include: _default_template_yaml
 
 metric_list:
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: true
   - metric: vanilla_accuracy
     aggregation: !function utils.aggregate_vanilla_accuracy
     higher_is_better: true
