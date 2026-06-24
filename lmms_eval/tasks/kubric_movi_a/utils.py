@@ -10,6 +10,7 @@ import string
 from typing import Optional
 
 import pandas as pd
+import numpy as np
 from PIL import Image, ImageDraw
 from loguru import logger as eval_logger
 

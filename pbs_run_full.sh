@@ -24,9 +24,29 @@ model_weights=Qwen/Qwen3-VL-4B-Instruct
 task=kubric_movi_a #3dsrbench_parquet, kubric_movi_a
 conda activate lmms
 
+LMMS_MASK_IMAGE=1 \
+LMMS_EVAL_INCLUDE_GT_HELP_TEXT="0" \
+  python -m lmms_eval \
+  --model $model \
+  --model_args max_num_frames=32,pretrained="$model_weights" \
+  --tasks $task \
+  --batch_size 1 \
+  --limit -1 \
+  --output_path "/home/ramanathan/VLM/lmms-eval/outputs/${task}_GT_0_Blank"
+
+LMMS_MASK_IMAGE=1 \
+LMMS_EVAL_INCLUDE_GT_HELP_TEXT="1" \
+  python -m lmms_eval \
+  --model $model \
+  --model_args max_num_frames=32,pretrained="$model_weights" \
+  --tasks $task \
+  --batch_size 1 \
+  --limit -1 \
+  --output_path "/home/ramanathan/VLM/lmms-eval/outputs/${task}_GT_1_Blank"
+
 # LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
-for gt_help_text in $(seq 0 8); do
+for gt_help_text in $(seq 2 8); do
   LMMS_MASK_IMAGE=0 \
   LMMS_EVAL_INCLUDE_GT_HELP_TEXT="${gt_help_text}" \
     python -m lmms_eval \
@@ -50,27 +70,3 @@ for gt_help_text in $(seq 0 8); do
       --output_path "/home/ramanathan/VLM/lmms-eval/outputs/${task}_GT_${gt_help_text}_Blank"
   fi
 done
-
-
-# Set LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1
-# Optional output dir: LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts/qwen3_vl_experiments
-# Or per-request via gen kwargs: save_attention=true and save_attention_dir=...
-# What gets written (per sample)
-
-# .../<tag>.json (prompt + answer + gen kwargs + basic shapes)
-# .../<tag>.npz (arrays: attn_map_thw and video_uint8_thwc when available)
-# .../<tag>_attn.mp4 (attention heatmap clip)
-# .../<tag>.mp4 (input video clip, if video frames are available)
-
-
-
-# LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_embspatial_vanilla/qwen3 LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
-# EMBSPATIAL_BBOX_TEXT=0 \
-# EMBSPATIAL_BBOX_OVERLAY=0 \
-#   python -m lmms_eval \
-#   --model qwen3_vl_experiments \
-#   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-2B-Instruct" \
-#   --tasks embspatial \
-#   --batch_size 1 \
-#   --limit -1 \
-#   --output_path /home/ramanathan/VLM/lmms-eval/outputs/embspatial
