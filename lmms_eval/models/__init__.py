@@ -126,6 +126,11 @@ AVAILABLE_CHAT_TEMPLATE_MODELS = {
     "qwen3_5": "Qwen3_5",
     "qwen3_5_experiments": "Qwen3_5_Experiments",
     "qwen2_5_vl": "Qwen2_5_VL",
+    "qwen2_5_omni": "Qwen2_5_Omni",
+    "qwen3_omni": "Qwen3_Omni",
+    "omnivinci": "OmniVinci",
+    "baichuan_omni": "BaichuanOmni",
+    "minicpm_o": "MiniCPM_O",
     "thyme": "Thyme",
     "openai": "OpenAICompatible",
     "vllm": "VLLM",
@@ -137,6 +142,7 @@ AVAILABLE_CHAT_TEMPLATE_MODELS = {
     "async_hf_model": "AsyncHFModel",
     "longvila": "LongVila",
     "llava_onevision1_5": "Llava_OneVision1_5",
+    "llava_onevision2": "Llava_OneVision2",
 }
 
 MODEL_ALIASES: dict[str, tuple[str, ...]] = {
