@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-3DSR_Gen_Text
+#PBS -N lmms-Synth_BBox
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml03
 
 # Activate the Conda environment
@@ -24,17 +24,17 @@ conda activate lmms
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
 # LMMS_MASK_IMAGE=1 \
 # LMMS_EVAL_INCLUDE_GT_HELP_TEXT=4 \
-#   python -m lmms_eval \
-#   --model qwen3_vl_experiments \
-#   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
-#   --tasks 3dsrbench_parquet \
-#   --batch_size 1 \
-#   --limit -1 \
-#   --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_4_Blank
+python -m lmms_eval \
+  --model qwen3_vl_experiments \
+  --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
+  --tasks kubric_movi_a_bbox_pred \
+  --batch_size 1 \
+  --limit -1 \
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_bbox_pred
 
-python tools/build_3dsr_prompt_variants_dataset.py  \
-  outputs/3dsrbench_4B_GT_4_Blank/submissions/3dsrbench_predictions_qwen3_vl_experiments.json  \
-  --model Qwen/Qwen3-VL-8B-Instruct \
+# python tools/build_3dsr_prompt_variants_dataset.py  \
+#   outputs/3dsrbench_4B_GT_4_Blank/submissions/3dsrbench_predictions_qwen3_vl_experiments.json  \
+#   --model Qwen/Qwen3-VL-8B-Instruct \
 
 # export HF_HOME="~/.cache/huggingface"
 # # Start a Cosmos3 Reasoner server separately before running this eval.

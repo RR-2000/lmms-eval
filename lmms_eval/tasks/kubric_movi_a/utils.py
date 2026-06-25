@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 from loguru import logger as eval_logger
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
+from lmms_eval.utils import sanitize_model_name
 
 
 TASK_FAMILIES = [
@@ -39,6 +40,20 @@ COLOR_MAP = {
     "purple": "yellow",
     "red": "cyan",
     "yellow": "green",
+}
+
+KUBRIC_BBOX_IOU_THRESHOLDS = {
+    "bbox_iou_acc_0_1": 0.1,
+    "bbox_iou_acc_0_25": 0.25,
+    "bbox_iou_acc_0_5": 0.5,
+    "bbox_iou_acc_0_75": 0.75,
+}
+
+KUBRIC_BBOX_PIXEL_THRESHOLDS = {
+    "bbox_center_acc_px10": 10.0,
+    "bbox_center_acc_px25": 25.0,
+    "bbox_center_acc_px50": 50.0,
+    "bbox_center_acc_px100": 100.0,
 }
 
 
@@ -135,6 +150,21 @@ def _get_queried_object_names(doc) -> list[str]:
 
 def _get_object_record(doc, object_name: str) -> Optional[dict]:
     return _get_object_map(doc).get(object_name)
+
+
+def _get_bbox_prompt_object_names(doc) -> list[str]:
+    items = doc.get("bbox_items", [])
+    if isinstance(items, list) and items:
+        return [item for item in items if item]
+
+    answer_text = _ground_truth_answer_text(doc)
+    if answer_text and _get_object_record(doc, answer_text):
+        return [answer_text]
+    if len(_get_visible_objects(doc)) == 1:
+        only_object = _get_visible_objects(doc)[0]
+        if isinstance(only_object, dict) and only_object.get("name"):
+            return [only_object["name"]]
+    return []
 
 
 def _get_options(doc) -> dict[str, str]:
@@ -239,6 +269,171 @@ def _format_bbox_colors_prompt(doc) -> str:
         prompt_lines.append(f"{object_name}: {_get_overlay_color_name(color_name)}")
         found_any = True
     return "\n".join(prompt_lines) if found_any else ""
+
+
+def _build_bbox_prompt(doc, lmms_eval_specific_kwargs=None) -> str:
+    if lmms_eval_specific_kwargs is None:
+        lmms_eval_specific_kwargs = {}
+
+    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
+    post_prompt = lmms_eval_specific_kwargs.get(
+        "post_prompt",
+        "Answer the above in the bbox format: [x_min, y_min, x_max, y_max]. Each in the range [0, 1000].\n",
+    )
+
+    prompt = pre_prompt
+    if prompt and not prompt.endswith("\n"):
+        prompt += "\n"
+
+    question = doc.get("question", "").strip()
+    if question:
+        prompt += f"Question: {question}\n"
+
+    object_names = _get_bbox_prompt_object_names(doc)
+    if object_names:
+        prompt += "Look at the image and find the bbox(es) of:\n"
+        for idx, object_name in enumerate(object_names, start=1):
+            prompt += f"{idx}. {object_name}\n"
+        prompt += "\n"
+
+    prompt += post_prompt
+    return prompt
+
+
+def _format_gt_bbox_answers(doc) -> dict[str, list[int]]:
+    formatted_answers = {}
+    for object_name in _get_bbox_prompt_object_names(doc):
+        obj = _get_object_record(doc, object_name)
+        bbox = _get_bbox_xyxy_1000(obj) if obj else None
+        if bbox:
+            formatted_answers[object_name] = bbox
+    return formatted_answers
+
+
+def _coerce_bbox_to_1000(bbox: list[float]) -> list[float]:
+    if len(bbox) != 4:
+        return [0.0, 0.0, 0.0, 0.0]
+
+    values = [float(v) for v in bbox]
+    if max(values) <= 1.0 and min(values) >= 0.0:
+        return [v * 1000.0 for v in values]
+    if max(values) <= 999.0 and min(values) >= 0.0:
+        return [max(0.0, min(1000.0, v)) for v in values]
+    return [max(0.0, min(1000.0, v)) for v in values]
+
+
+def _sanitize_bbox_xyxy(bbox: list[float]) -> list[float]:
+    if len(bbox) != 4:
+        return [0.0, 0.0, 0.0, 0.0]
+
+    x1, y1, x2, y2 = _coerce_bbox_to_1000(bbox)
+    left, right = sorted((x1, x2))
+    top, bottom = sorted((y1, y2))
+    return [left, top, right, bottom]
+
+
+def _extract_bbox_sequences(text: str) -> list[list[float]]:
+    if not text:
+        return []
+
+    pattern = r"\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]"
+    matches = re.findall(pattern, text)
+    return [[float(match[i]) for i in range(4)] for match in matches]
+
+
+def _parse_predicted_bboxes(text: str, object_names: list[str]) -> dict[str, list[float]]:
+    predictions = {}
+    if not text or not object_names:
+        return predictions
+
+    named_patterns = [
+        r"(?im)^\s*(?:\d+\.\s*)?(?P<name>[^:\n]+?)\s*:\s*\[(?P<bbox>[^\]]+)\]",
+        r"(?im)^\s*(?P<name>[^:\n]+?)\s*-\s*\[(?P<bbox>[^\]]+)\]",
+    ]
+    object_lookup = {name.lower(): name for name in object_names}
+
+    for pattern in named_patterns:
+        for match in re.finditer(pattern, text):
+            name_key = match.group("name").strip().lower()
+            if name_key not in object_lookup:
+                continue
+            bbox_values = _extract_bbox_sequences(f"[{match.group('bbox')}]")
+            if bbox_values:
+                predictions[object_lookup[name_key]] = _sanitize_bbox_xyxy(bbox_values[0])
+
+    remaining_names = [name for name in object_names if name not in predictions]
+    if remaining_names and not predictions:
+        raw_boxes = _extract_bbox_sequences(text)
+        for object_name, bbox in zip(remaining_names, raw_boxes):
+            predictions.setdefault(object_name, _sanitize_bbox_xyxy(bbox))
+
+    return predictions
+
+
+def _compute_iou(box1: list[float], box2: list[float]) -> float:
+    x_left = max(box1[0], box2[0])
+    y_top = max(box1[1], box2[1])
+    x_right = min(box1[2], box2[2])
+    y_bottom = min(box1[3], box2[3])
+
+    intersection_area = max(0.0, x_right - x_left) * max(0.0, y_bottom - y_top)
+    box1_area = max(0.0, box1[2] - box1[0]) * max(0.0, box1[3] - box1[1])
+    box2_area = max(0.0, box2[2] - box2[0]) * max(0.0, box2[3] - box2[1])
+    union_area = box1_area + box2_area - intersection_area
+    return intersection_area / union_area if union_area > 0 else 0.0
+
+
+def _compute_center_distance(box1: list[float], box2: list[float]) -> float:
+    center_1_x = (box1[0] + box1[2]) / 2.0
+    center_1_y = (box1[1] + box1[3]) / 2.0
+    center_2_x = (box2[0] + box2[2]) / 2.0
+    center_2_y = (box2[1] + box2[3]) / 2.0
+    return float(np.hypot(center_1_x - center_2_x, center_1_y - center_2_y))
+
+
+def _score_bbox_prediction(doc, pred_text: str) -> dict:
+    gt_answers = _format_gt_bbox_answers(doc)
+    object_names = list(gt_answers.keys())
+    pred_answers = _parse_predicted_bboxes(pred_text, object_names)
+
+    per_object = []
+    for object_name in object_names:
+        gt_bbox = [float(v) for v in gt_answers[object_name]]
+        pred_bbox = pred_answers.get(object_name, [0.0, 0.0, 0.0, 0.0])
+        iou = _compute_iou(gt_bbox, pred_bbox)
+        center_distance = _compute_center_distance(gt_bbox, pred_bbox)
+        per_object.append(
+            {
+                "object_name": object_name,
+                "gt_bbox": gt_bbox,
+                "pred_bbox": pred_bbox,
+                "iou": iou,
+                "center_distance": center_distance,
+            }
+        )
+
+    if not per_object:
+        return {
+            "mean_iou": 0.0,
+            "mean_center_distance": 0.0,
+            "per_object": [],
+            **{metric_name: 0.0 for metric_name in KUBRIC_BBOX_IOU_THRESHOLDS},
+            **{metric_name: 0.0 for metric_name in KUBRIC_BBOX_PIXEL_THRESHOLDS},
+        }
+
+    mean_iou = sum(item["iou"] for item in per_object) / len(per_object)
+    mean_center_distance = sum(item["center_distance"] for item in per_object) / len(per_object)
+
+    scores = {
+        "mean_iou": mean_iou,
+        "mean_center_distance": mean_center_distance,
+        "per_object": per_object,
+    }
+    for metric_name, threshold in KUBRIC_BBOX_IOU_THRESHOLDS.items():
+        scores[metric_name] = sum(item["iou"] >= threshold for item in per_object) / len(per_object)
+    for metric_name, threshold in KUBRIC_BBOX_PIXEL_THRESHOLDS.items():
+        scores[metric_name] = sum(item["center_distance"] <= threshold for item in per_object) / len(per_object)
+    return scores
 
 
 def _build_text_only_position_hint(doc, gt_answer: str) -> str:
@@ -364,6 +559,15 @@ def doc_to_visual(doc):
     return [_draw_bbox_overlays(doc, image)]
 
 
+def bbox_doc_to_visual(doc):
+    image = _load_image(doc.get("image"))
+    if image is None:
+        image = _load_image(doc.get("img_path"))
+    if image is None:
+        raise FileNotFoundError(f"No usable image found for sample {doc.get('index', doc.get('qid', 'unknown'))}")
+    return [image]
+
+
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     if lmms_eval_specific_kwargs is None:
         lmms_eval_specific_kwargs = {}
@@ -397,6 +601,10 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     if post_prompt:
         prompt += post_prompt
     return prompt
+
+
+def bbox_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    return _build_bbox_prompt(doc, lmms_eval_specific_kwargs)
 
 
 def doc_to_target(doc):
@@ -474,6 +682,51 @@ def process_results(doc, results):
     return result_dict
 
 
+def bbox_process_results(doc, results):
+    pred = results[0].strip() if results else ""
+    scores = _score_bbox_prediction(doc, pred)
+    index = doc.get("index", doc.get("qid"))
+    qid = doc.get("qid", index)
+
+    base_entry = {
+        "index": index,
+        "qid": qid,
+        "score": scores["mean_iou"],
+        "mean_iou": scores["mean_iou"],
+        "mean_center_distance": scores["mean_center_distance"],
+        "per_object": scores["per_object"],
+    }
+    for metric_name in KUBRIC_BBOX_IOU_THRESHOLDS:
+        base_entry[metric_name] = scores[metric_name]
+    for metric_name in KUBRIC_BBOX_PIXEL_THRESHOLDS:
+        base_entry[metric_name] = scores[metric_name]
+
+    result_dict = {
+        "submission": {
+            "index": index,
+            "qid": qid,
+            "question_prompt": _build_bbox_prompt(doc),
+            "img_path": _get_image_path(doc),
+            "gt_answers": _format_gt_bbox_answers(doc),
+            "parsed_prediction": {
+                item["object_name"]: item["pred_bbox"] for item in scores["per_object"]
+            },
+            "model_answer": pred,
+            "per_object": scores["per_object"],
+            "mean_iou": scores["mean_iou"],
+            "mean_center_distance": scores["mean_center_distance"],
+        },
+        "bbox_mean_iou": base_entry,
+    }
+
+    for metric_name in KUBRIC_BBOX_IOU_THRESHOLDS:
+        result_dict[metric_name] = base_entry
+    for metric_name in KUBRIC_BBOX_PIXEL_THRESHOLDS:
+        result_dict[metric_name] = base_entry
+
+    return result_dict
+
+
 def _aggregate_accuracy(results, task_family=None, difficulty=None):
     filtered = [
         r["score"]
@@ -500,11 +753,77 @@ def aggregate_vanilla_accuracy(results):
     return overall
 
 
+def _get_submission_model_tag(args) -> str:
+    model_name = getattr(args, "model", "") or ""
+    if model_name:
+        return sanitize_model_name(model_name)
+
+    model_args = getattr(args, "model_args", "") or ""
+    for key in ("pretrained", "model_name", "model_path"):
+        match = re.search(rf"(?:^|,){key}=([^,]+)", model_args)
+        if match:
+            return sanitize_model_name(match.group(1).strip())
+
+    return "unknown_model"
+
+
 def aggregate_results_for_submission(results, args):
-    path = generate_submission_file("kubric_movi_a_combined_records.json", args)
+    model_tag = _get_submission_model_tag(args)
+    path = generate_submission_file(f"kubric_movi_a_combined_records_{model_tag}.json", args)
     with open(path, "w") as f:
         json.dump(results, f, indent=2)
     eval_logger.info(f"Combined records saved to {path}.")
+
+
+def bbox_aggregate_results_for_submission(results, args):
+    model_tag = _get_submission_model_tag(args)
+    path = generate_submission_file(f"kubric_movi_a_bbox_predictions_{model_tag}.json", args)
+    with open(path, "w") as f:
+        json.dump(results, f, indent=2)
+    eval_logger.info(f"BBox predictions saved to {path}.")
+
+
+def _aggregate_bbox_metric(results, metric_name: str) -> float:
+    if not results:
+        return 0.0
+    values = [float(r.get(metric_name, 0.0)) for r in results]
+    return sum(values) / len(values) if values else 0.0
+
+
+def aggregate_bbox_mean_iou(results):
+    return _aggregate_bbox_metric(results, "mean_iou")
+
+
+def aggregate_bbox_iou_acc_0_1(results):
+    return _aggregate_bbox_metric(results, "bbox_iou_acc_0_1")
+
+
+def aggregate_bbox_iou_acc_0_25(results):
+    return _aggregate_bbox_metric(results, "bbox_iou_acc_0_25")
+
+
+def aggregate_bbox_iou_acc_0_5(results):
+    return _aggregate_bbox_metric(results, "bbox_iou_acc_0_5")
+
+
+def aggregate_bbox_iou_acc_0_75(results):
+    return _aggregate_bbox_metric(results, "bbox_iou_acc_0_75")
+
+
+def aggregate_bbox_center_acc_px10(results):
+    return _aggregate_bbox_metric(results, "bbox_center_acc_px10")
+
+
+def aggregate_bbox_center_acc_px25(results):
+    return _aggregate_bbox_metric(results, "bbox_center_acc_px25")
+
+
+def aggregate_bbox_center_acc_px50(results):
+    return _aggregate_bbox_metric(results, "bbox_center_acc_px50")
+
+
+def aggregate_bbox_center_acc_px100(results):
+    return _aggregate_bbox_metric(results, "bbox_center_acc_px100")
 
 
 def aggregate_camera_relative_position_accuracy(results):

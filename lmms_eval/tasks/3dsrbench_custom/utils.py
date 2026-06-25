@@ -155,8 +155,6 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
             if "flip" in str(doc.get("index")):
                 img = img.transpose(Image.FLIP_LEFT_RIGHT)
             
-            if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
-                img = Image.fromarray(np.array(img) * 0)
             
             if os.getenv("LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR", ""):
                 save_path = os.path.join(os.getenv("LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR"), "TMP_IMGS", f"{doc.get('qid', doc.get('index', 'unknown'))}.png")
@@ -166,7 +164,7 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
                     print(f"Debug: Drew bbox overlays on image for doc_id={doc.get('index')} at {save_path}")
             
             if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
-                return None
+                img = Image.fromarray(np.array(img) * 0)
             return img
     raise FileNotFoundError("No image path found in document.")
 
