@@ -42,7 +42,7 @@ process_vision_info, _has_qwen_vl = optional_import("qwen_vl_utils", "process_vi
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input_json", type=Path, help="Path to the saved submission JSON file.")
+    parser.add_argument("--input_json", type=Path, help="Path to the saved submission JSON file.")
     parser.add_argument(
         "--source-jsonl",
         type=Path,
@@ -345,6 +345,13 @@ def resolve_source_record(
     return source
 
 
+def get_source_original_question(source_record: dict[str, Any]) -> str:
+    original_question = str(source_record.get("original_question", "") or "").strip()
+    if original_question:
+        return original_question
+    return str(source_record.get("question", "") or "").strip()
+
+
 def parse_prompt_parts(question_prompt: str, gt_help_text: str) -> dict[str, Any]:
     prompt = question_prompt.replace("\r\n", "\n").strip("\n")
     question_text = prompt
@@ -529,7 +536,7 @@ def build_variant_record(
         post_prompt=parsed_prompt["post_prompt"],
     )
 
-    return {
+    variant_record = {
         "parent_index": parent_index,
         "parent_qid": parent_qid,
         "variant_id": variant_idx,
@@ -554,6 +561,13 @@ def build_variant_record(
         "main_category": saved_record.get("main_category"),
     }
 
+    # Carry through every field from the parent saved record so each variant row
+    # remains fully traceable back to its source submission payload.
+    for key, value in saved_record.items():
+        variant_record[f"parent_{key}"] = value
+
+    return variant_record
+
 
 def build_dataset(
     *,
@@ -574,10 +588,11 @@ def build_dataset(
             str(saved_record.get("question_prompt", "")),
             str(saved_record.get("gt_help_text", "") or ""),
         )
+        
         variants = generate_variants_with_model(
             rewriter=rewriter,
             image=image,
-            original_question=str(source_record.get("question", source_record.get("original_question", ""))),
+            original_question=get_source_original_question(source_record),
             options_map=parsed_prompt["options_map"],
             gt_answer=str(saved_record.get("gt_answer", source_record.get("answer", ""))),
             gt_help_text=str(saved_record.get("gt_help_text", "")),

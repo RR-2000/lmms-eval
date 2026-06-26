@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 from PIL import Image, ImageDraw, ImageFont
 
 DEFAULT_INPUT = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_bbox_pred/submissions/3dsrbench_bbox_predictions.json"
+    "/home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_bbox_pred/submissions/kubric_movi_a_bbox_predictions_qwen3_vl_experiments.json"
 )
 DEFAULT_OUTPUT_DIR = DEFAULT_INPUT.parent / "visualized_bboxes"
 DEFAULT_IMAGE_CACHE_DIR = DEFAULT_OUTPUT_DIR / "_image_cache"
@@ -412,6 +412,19 @@ def image_name_from_url(image_url: str) -> str:
     return name or "image.jpg"
 
 
+def image_name_from_path(image_path: str) -> str:
+    name = Path(image_path).name
+    return name or "image.jpg"
+
+
+def image_name_from_source(image_url: str | None, img_path: str | None) -> str:
+    if image_url:
+        return image_name_from_url(image_url)
+    if img_path:
+        return image_name_from_path(img_path)
+    return "image.jpg"
+
+
 def sanitize_for_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_") or "item"
 
@@ -437,6 +450,30 @@ def download_image(
     with urlopen(request, timeout=timeout) as response:
         cached_path.write_bytes(response.read())
     return cached_path
+
+
+def resolve_image_path(
+    image_url: str | None,
+    img_path: str | None,
+    cache_dir: Path,
+    redownload: bool,
+    timeout: float,
+) -> Path:
+    if image_url:
+        return download_image(
+            image_url=image_url,
+            cache_dir=cache_dir,
+            redownload=redownload,
+            timeout=timeout,
+        )
+
+    if img_path:
+        local_path = Path(img_path).expanduser()
+        if not local_path.is_file():
+            raise FileNotFoundError(f"Local image path not found: {local_path}")
+        return local_path
+
+    raise ValueError("Missing both image_url and img_path")
 
 
 def get_font() -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
@@ -472,7 +509,7 @@ def draw_boxes(image: "Image.Image", boxes: list[ParsedBox], flip_image: bool) -
         x1, y1, x2, y2 = scale_bbox_to_pixels(parsed_box.bbox, annotated.width, annotated.height)
         draw.rectangle((x1, y1, x2, y2), outline=color, width=4)
 
-        label = f"{parsed_box.label} [{parsed_box.bbox[0]}, {parsed_box.bbox[1]}, {parsed_box.bbox[2]}, {parsed_box.bbox[3]}]"
+        label = f"{parsed_box.label} [{x1}, {y1}, {x2}, {y2}]"
         left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
         label_width = right - left
         label_height = bottom - top
@@ -505,9 +542,14 @@ def load_image(path: Path) -> "Image.Image":
         return Image.open(BytesIO(handle.read())).convert("RGB")
 
 
-def build_output_path(output_dir: Path, record_index: str, image_url: str) -> Path:
+def build_output_path(
+    output_dir: Path,
+    record_index: str,
+    image_url: str | None,
+    img_path: str | None,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    image_name = image_name_from_url(image_url)
+    image_name = image_name_from_source(image_url, img_path)
     stem = Path(image_name).stem
     suffix = Path(image_name).suffix or ".jpg"
     filename = f"{sanitize_for_filename(record_index)}_{sanitize_for_filename(stem)}{suffix}"
@@ -562,11 +604,17 @@ def main() -> int:
         total += 1
         record_index = str(record.get("index", f"record_{args.start + total - 1}"))
         image_url = record.get("image_url")
+        img_path = record.get("img_path")
         model_answer = record.get("model_answer", "")
         flip_image = "flip" in str(record.get("qid", ""))
 
         if not isinstance(image_url, str) or not image_url:
-            print(f"[skip] {record_index}: missing image_url", file=sys.stderr)
+            image_url = None
+        if not isinstance(img_path, str) or not img_path:
+            img_path = None
+
+        if image_url is None and img_path is None:
+            print(f"[skip] {record_index}: missing both image_url and img_path", file=sys.stderr)
             skipped += 1
             continue
 
@@ -576,20 +624,21 @@ def main() -> int:
             skipped += 1
             continue
 
-        output_path = build_output_path(output_dir, record_index, image_url)
+        output_path = build_output_path(output_dir, record_index, image_url, img_path)
         if output_path.exists() and not args.overwrite:
             print(f"[skip] {record_index}: output exists at {output_path}", file=sys.stderr)
             skipped += 1
             continue
 
         try:
-            cached_image = download_image(
+            source_image_path = resolve_image_path(
                 image_url=image_url,
+                img_path=img_path,
                 cache_dir=image_cache_dir,
                 redownload=args.redownload,
                 timeout=args.timeout,
             )
-            image = load_image(cached_image)
+            image = load_image(source_image_path)
             annotated = draw_boxes(image, boxes, flip_image)
             annotated.save(output_path)
             saved += 1
