@@ -647,7 +647,6 @@ def variants_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     question = doc.get("question", "")
     options = doc.get("options", "")
 
-
     assert question, "Question is missing in the variants document."
     assert gt_help, "Help text is missing in the variants document."
     assert options, "Options are missing in the variants document."
@@ -658,8 +657,10 @@ def variants_doc_to_text(doc, lmms_eval_specific_kwargs=None):
         if not prompt.endswith("\n"):
             prompt += "\n"
     prompt += f"Question: {question}\n"
+    if options:
+        prompt += "Options:\n" + options + "\n"
     if gt_help:
-        prompt += f"Help: {gt_help}\n"
+        prompt += f"{gt_help}\n"
     if post_prompt:
         prompt += post_prompt
 
@@ -719,10 +720,10 @@ def get_main_category(category: str) -> str:
 def process_results(doc, results):
     pred = results[0].strip()
     pred_answer = extract_answer(pred)
-    gt_answer = _ground_truth_answer_letter(doc) or str(doc.get("answer", "")).strip()
+    gt_answer = _ground_truth_answer_letter(doc) or str(doc.get("answer", "")).strip() or doc.get("parent_gt_answer", "")
     gt_help_format = os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0")
-    gt_help_text = ""
-    if gt_help_format in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+    gt_help_text = doc.get("help", "")
+    if not gt_help_text and gt_help_format in {"1", "2", "3", "4", "5", "6", "7", "8"}:
         gt_help_text = _build_GT_help(doc, _build_options(doc), gt_help_format)
 
     score = 1.0 if pred_answer == gt_answer else 0.0
@@ -741,10 +742,16 @@ def process_results(doc, results):
         "main_category": main_category,
     }
 
+    question = ""
+    try:
+        question = variants_doc_to_text(doc)
+    except Exception as e:
+        question = doc_to_text(doc)
+
     submission_entry = {
         "index": index,
         "qid": qid,
-        "question_prompt": doc_to_text(doc),
+        "question_prompt": question,
         "image_url": doc.get("image_url", doc.get("image")),
         "gt_answer": gt_answer,
         "gt_help_text": gt_help_text,

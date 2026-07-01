@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-3SDR_Variants
+#PBS -N lmms-3SDR_Variants_Blank
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml03
 
 # Activate the Conda environment
@@ -22,7 +22,7 @@ conda activate lmms
 
 # LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
-LMMS_MASK_IMAGE=0 \
+LMMS_MASK_IMAGE=1 \
 LMMS_EVAL_INCLUDE_GT_HELP_TEXT=0 \
 python -m lmms_eval \
   --model qwen3_vl_experiments \
@@ -30,6 +30,6 @@ python -m lmms_eval \
   --tasks 3dsrbench_variants \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_variants
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_variants_Blank
 
 # python tools/build_3dsr_prompt_variants_dataset.py --input_json /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_4_Blank/submissions/3dsrbench_predictions_qwen3_vl_experiments.json --source-jsonl /home/ramanathan/data/3DSR/dataset.jsonl
