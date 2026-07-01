@@ -507,6 +507,7 @@ def generate_variants_with_model(
                 break
             time.sleep(min(5.0 * attempt, 15.0))
 
+    return None
     raise RuntimeError(f"Failed to generate variants after {retries} attempts: {last_error}") from last_error
 
 
@@ -599,6 +600,8 @@ def build_dataset(
             variants=args.variants,
             retries=args.retries,
         )
+        if variants is None:
+            continue
 
         for variant_idx, variant_payload in enumerate(variants):
             output_records.append(

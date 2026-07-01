@@ -1,10 +1,11 @@
 dataset_name: null
 test_split: test
-task: "3dsrbench_parquet_variant"
+task: "3dsrbench_variants"
 include: _default_template_yaml
 dataset_kwargs:
   data_files:
-    test: /home/ramanathan/data/3DSR/3dsrbench_predictions_qwen3_vl_experiments_variants.parquet
+    test: /home/ramanathan/data/3DSR/variants.parquet
+
 
 metric_list:
   - metric: submission
@@ -61,3 +62,14 @@ metric_list:
   - metric: multi_object_viewpoint_towards_object_accuracy
     aggregation: !function utils.aggregate_multi_object_viewpoint_towards_object_accuracy
     higher_is_better: true
+
+
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.variants_doc_to_text
+process_results: !function utils.process_results
+
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: "Please select the correct answer directly from the options above and include the Option letter (A, B, C, D).\n"

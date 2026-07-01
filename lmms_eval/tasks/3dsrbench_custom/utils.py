@@ -52,6 +52,7 @@ DEFAULT_COLOR_ORDER = [
     "navy",
     "maroon",
 ]
+IMG_BASE="/home/ramanathan/data/3dsrbench_data/images/coco_images"
 
 def _parse_json_maybe(value):
     if isinstance(value, str):
@@ -113,12 +114,15 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
             doc.get("resolved_img_path"),
             doc.get("img_path"),
             doc.get("image"),
+            doc.get("image_url"),
         ]
     )
     # if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["2", "3"]:
     #     for path_idx in range(len(path_candidates)):
     #         path_candidates[path_idx] = path_candidates[path_idx].replace("3DSR_fixed", "3DSR")
     for image_path in path_candidates:
+        if not image_path:
+            continue
         if os.path.isfile(image_path):
             drawn = False
             img = Image.open(image_path).convert("RGB")
@@ -166,6 +170,19 @@ def _load_image_from_doc(doc, use_overlay: bool = False):
             if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
                 img = Image.fromarray(np.array(img) * 0)
             return img
+        
+        # if image_path is a URL, try to download it
+        if image_path.startswith("http://") or image_path.startswith("https://"):
+            img_path = os.path.join(IMG_BASE, image_path.split("/")[-2], image_path.split("/")[-1])
+            img = Image.open(img_path).convert("RGB")
+
+            if "flip" in str(doc.get("index")):
+                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            
+            if os.getenv("LMMS_MASK_IMAGE", "0") == "1":
+                img = Image.fromarray(np.array(img) * 0)
+            return img
+                
     raise FileNotFoundError("No image path found in document.")
 
 
@@ -611,6 +628,38 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
         prompt += "Options:\n"
         for key, item in options.items():
             prompt += f"{key}. {item}\n"
+    if post_prompt:
+        prompt += post_prompt
+
+    return prompt
+
+def variants_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    if lmms_eval_specific_kwargs is None:
+        lmms_eval_specific_kwargs = {}
+
+    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
+    post_prompt = lmms_eval_specific_kwargs.get(
+        "post_prompt",
+        "Please select the correct answer from the options above and include the Option letter (A, B, C, D). \n",
+    )
+
+    gt_help = doc.get("help", "")
+    question = doc.get("question", "")
+    options = doc.get("options", "")
+
+
+    assert question, "Question is missing in the variants document."
+    assert gt_help, "Help text is missing in the variants document."
+    assert options, "Options are missing in the variants document."
+    
+    prompt = ""
+    if pre_prompt:
+        prompt += pre_prompt
+        if not prompt.endswith("\n"):
+            prompt += "\n"
+    prompt += f"Question: {question}\n"
+    if gt_help:
+        prompt += f"Help: {gt_help}\n"
     if post_prompt:
         prompt += post_prompt
 
