@@ -79,6 +79,19 @@ python tools/bench_video_decode_backends.py \
 
 `pyav` is the default reference. If optional backends are not installed, the script records backend-specific errors in the JSON report without failing the whole run.
 
+### `score_3dsr_variant_majority.py`
+
+Score 3DSR prompt-variant predictions by grouping `qid`s that differ only in the `__vXX` suffix and marking a question correct when a strict majority of its variants are correct.
+
+```bash
+python tools/score_3dsr_variant_majority.py \
+  outputs/3dsrbench_variants/submissions/3dsrbench_predictions_qwen3_vl_experiments.json
+
+python tools/score_3dsr_variant_majority.py \
+  outputs/3dsrbench_variants/submissions/3dsrbench_predictions_qwen3_vl_experiments.json \
+  --output-json outputs/3dsrbench_variants/submissions/3dsrbench_predictions_qwen3_vl_experiments.majority_summary.json
+```
+
 ## Notebooks
 
 ### `make_image_hf_dataset.ipynb`

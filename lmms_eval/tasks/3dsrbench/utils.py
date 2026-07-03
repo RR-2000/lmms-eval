@@ -12,6 +12,9 @@ The evaluation includes multiple accuracy metrics:
 
 import re
 import string
+import os
+import numpy as np
+from PIL import Image
 from typing import Optional
 
 import pandas as pd
@@ -45,6 +48,9 @@ def doc_to_visual(doc):
     Returns:
         list: A list containing the RGB-converted image.
     """
+    if os.environ.get("LMMS_MASK_IMAGE", "0") == "1":
+        # If masking is enabled, return the masked image
+        return [Image.fromarray(np.array(doc["image"].convert("RGB"))*0)]
     return [doc["image"].convert("RGB")]
 
 

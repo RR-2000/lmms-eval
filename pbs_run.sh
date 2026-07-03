@@ -27,9 +27,9 @@ LMMS_EVAL_INCLUDE_GT_HELP_TEXT=0 \
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
-  --tasks 3dsrbench_variants \
+  --tasks 3dsrbench_parquet \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_variants_Blank
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_parquet_Blank
 
 # python tools/build_3dsr_prompt_variants_dataset.py --input_json /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_4_Blank/submissions/3dsrbench_predictions_qwen3_vl_experiments.json --source-jsonl /home/ramanathan/data/3DSR/dataset.jsonl
