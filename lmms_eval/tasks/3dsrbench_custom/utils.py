@@ -34,6 +34,12 @@ CATEGORY_MAPPING = {
     "multi_object_same_direction": "multi_object",
 }
 
+# Semantic mapping for objects in the 3DSRBench dataset
+
+map_subject = "large red cube"
+map_object1 = "small blue sphere"
+map_object2 = "medium green cylinder"
+
 MAIN_CATEGORIES = ["height", "location", "orientation", "multi_object"]
 
 DEFAULT_COLOR_ORDER = [
@@ -257,6 +263,108 @@ def _build_text_only_position_hint(doc, gt) -> str:
     }
     return hints.get((qtype, relation), f"Determine the relevant relative position or orientation involving {subject} before answering.")
 
+def _format_semantic_mapping(doc, gt):
+    qtype = _normalize_text(doc.get("qtype", ""))
+    relation = _normalize_text(doc.get("relation", ""))
+    subject = doc.get("subject")
+    object1 = doc.get("object1", doc.get("object_1"))
+    object2 = doc.get("object2", doc.get("object_2"))
+    map_gt = map_subject if gt == subject else (map_object1 if gt == object1 else (map_object2 if gt == object2 else gt))
+    if gt in [subject, object1, object2]:
+        gt = map_gt  # If gt is one of the objects, then map it to the corresponding semantic representation
+
+    mapping_prompt = f"Map the objects in the question to the following semantic representations:\n"
+    if subject:
+        mapping_prompt += f"  {subject} -> {map_subject}\n"
+    if object1:
+        mapping_prompt += f"  {object1} -> {map_object1}\n"
+    if object2:
+        mapping_prompt += f"  {object2} -> {map_object2}\n"
+
+    subject = map_subject if subject else None
+    object1 = map_object1 if object1 else None
+    object2 = map_object2 if object2 else None
+    
+
+    hints = {
+        ("height", "higher"): f"The {gt} is {'higher' if 'higher' in str(doc.get('original_question', '')) else 'lower'}.",
+        # f"Determine the relative vertical positions of {subject} and {object1}, then answer which one is higher in the image.",
+        ("location", "above"): f"The {subject} is directly {'above' if 'above' in str(doc.get('original_question', '')) else 'underneath'} {object1}." if gt == "yes" else f"The {subject} is not directly {'above' if 'above' in str(doc.get('original_question', '')) else 'underneath'} {object1}.",
+        # f"Determine whether {subject} is vertically positioned above {object1} in the image.",
+        ("location", "closer to camera"): f"The {gt} is closer to the camera." if "closer to the camera" in str(doc.get('original_question', '')) else f"The {gt} is farther from the camera.",
+        # f"Determine the relative depth of {subject} and {object1}, then answer which object is closer to the camera.",
+        ("location", "next to"): f"The {subject} is far from {object1}." if gt == 'far away from each other' else f"The {subject} is close to {object1}.",
+        # f"Determine whether {subject} is positioned adjacent to {object1} in the image.",
+        ("orientation", "in front of"): f"The {subject} is in front of {object1} from {object1}'s perspective." if gt == 'in front of' else f"The {subject} is behind {object1} from {object1}'s perspective.",
+        # f"Determine the relative front-back positions of {subject} and {object1}, then answer whether {subject} is in front of {object1}.",
+        ("orientation", "on the left"): f"The {subject} is on the left of {object1} from {object1}'s perspective." if gt == 'on the left' else f"The {subject} is on the right of {object1} from {object1}'s perspective.",
+        # f"Determine the relative left-right positions of {subject} and {object1}, then answer whether {subject} is on the left of {object1}.",
+        ("orientation", "viewpoint"): f"The {subject}'s {gt} side is facing the camera.",
+        # f"Determine the viewing direction of {subject} relative to the camera viewpoint, then answer which direction it is facing.",
+        ("multi_object", "closer to"): f"The {gt} is closer to {subject}.",
+        # f"Determine the relative distances from {subject} to {object1} and {object2}, then answer which object {subject} is closer to.",
+        ("multi_object", "facing"): f"The {subject} is facing {gt}.",
+        # f"Determine whether {subject} is oriented toward {object1} or toward {object2}, then answer which object it is facing.",
+        ("multi_object", "parallel"): f"The {subject} and {object1} are parallel." if gt == 'parallel' else f"The {subject} and {object1} are perpendicular.",
+        # f"Determine the relative orientations of {subject} and {object1}, then answer whether they are parallel.",
+        ("multi_object", "same direction"): f"The {subject} and {object1} are facing the same direction." if gt == 'same or similar directions' else f"The {subject} and {object1} are facing different directions.",
+        # f"Determine the relative orientations of {subject} and {object1}, then answer whether they are facing the same direction.",
+        ("multi_object", "viewpoint towards object"): f"The {subject}'s {gt} side is facing the {object1}",
+        # f"Determine the relative position of {object1} from {subject}'s current viewpoint, then answer which direction {subject} should turn to face {object1}.",
+    }
+    return mapping_prompt + hints.get((qtype, relation), f"Determine the relevant relative position or orientation involving {subject} before answering.")
+
+
+def _format_semantic_override(doc, gt):
+    qtype = _normalize_text(doc.get("qtype", ""))
+    relation = _normalize_text(doc.get("relation", ""))
+    subject = doc.get("subject")
+    object1 = doc.get("object1", doc.get("object_1"))
+    object2 = doc.get("object2", doc.get("object_2"))
+    map_gt = map_subject if gt == subject else (map_object1 if gt == object1 else (map_object2 if gt == object2 else gt))
+    if gt in [subject, object1, object2]:
+        gt = map_gt  # If gt is one of the objects, then map it to the corresponding semantic representation
+
+    # mapping_prompt = f"Map the objects in the question to the following semantic representations:\n"
+    # if subject:
+    #     mapping_prompt += f"  {subject} -> {map_subject}\n"
+    # if object1:
+    #     mapping_prompt += f"  {object1} -> {map_object1}\n"
+    # if object2:
+    #     mapping_prompt += f"  {object2} -> {map_object2}\n"
+
+    subject = map_subject if subject else None
+    object1 = map_object1 if object1 else None
+    object2 = map_object2 if object2 else None
+    
+
+    hints = {
+        ("height", "higher"): f"The {gt} is {'higher' if 'higher' in str(doc.get('original_question', '')) else 'lower'}.",
+        # f"Determine the relative vertical positions of {subject} and {object1}, then answer which one is higher in the image.",
+        ("location", "above"): f"The {subject} is directly {'above' if 'above' in str(doc.get('original_question', '')) else 'underneath'} {object1}." if gt == "yes" else f"The {subject} is not directly {'above' if 'above' in str(doc.get('original_question', '')) else 'underneath'} {object1}.",
+        # f"Determine whether {subject} is vertically positioned above {object1} in the image.",
+        ("location", "closer to camera"): f"The {gt} is closer to the camera." if "closer to the camera" in str(doc.get('original_question', '')) else f"The {gt} is farther from the camera.",
+        # f"Determine the relative depth of {subject} and {object1}, then answer which object is closer to the camera.",
+        ("location", "next to"): f"The {subject} is far from {object1}." if gt == 'far away from each other' else f"The {subject} is close to {object1}.",
+        # f"Determine whether {subject} is positioned adjacent to {object1} in the image.",
+        ("orientation", "in front of"): f"The {subject} is in front of {object1} from {object1}'s perspective." if gt == 'in front of' else f"The {subject} is behind {object1} from {object1}'s perspective.",
+        # f"Determine the relative front-back positions of {subject} and {object1}, then answer whether {subject} is in front of {object1}.",
+        ("orientation", "on the left"): f"The {subject} is on the left of {object1} from {object1}'s perspective." if gt == 'on the left' else f"The {subject} is on the right of {object1} from {object1}'s perspective.",
+        # f"Determine the relative left-right positions of {subject} and {object1}, then answer whether {subject} is on the left of {object1}.",
+        ("orientation", "viewpoint"): f"The {subject}'s {gt} side is facing the camera.",
+        # f"Determine the viewing direction of {subject} relative to the camera viewpoint, then answer which direction it is facing.",
+        ("multi_object", "closer to"): f"The {gt} is closer to {subject}.",
+        # f"Determine the relative distances from {subject} to {object1} and {object2}, then answer which object {subject} is closer to.",
+        ("multi_object", "facing"): f"The {subject} is facing {gt}.",
+        # f"Determine whether {subject} is oriented toward {object1} or toward {object2}, then answer which object it is facing.",
+        ("multi_object", "parallel"): f"The {subject} and {object1} are parallel." if gt == 'parallel' else f"The {subject} and {object1} are perpendicular.",
+        # f"Determine the relative orientations of {subject} and {object1}, then answer whether they are parallel.",
+        ("multi_object", "same direction"): f"The {subject} and {object1} are facing the same direction." if gt == 'same or similar directions' else f"The {subject} and {object1} are facing different directions.",
+        # f"Determine the relative orientations of {subject} and {object1}, then answer whether they are facing the same direction.",
+        ("multi_object", "viewpoint towards object"): f"The {subject}'s {gt} side is facing the {object1}",
+        # f"Determine the relative position of {object1} from {subject}'s current viewpoint, then answer which direction {subject} should turn to face {object1}.",
+    }
+    return hints.get((qtype, relation), f"Determine the relevant relative position or orientation involving {subject} before answering.")
 
 def _build_options(doc) -> dict[str, str]:
     options = {}
@@ -473,7 +581,7 @@ def _format_bbox_colors_prompt(doc) -> str:
 
 def _build_GT_help(doc, options, answer_format) -> str:
 
-    assert answer_format in {"0", "1", "2", "3", "4", "5", "6", "7", "8"}, "Invalid GT help format option"
+    assert answer_format in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}, "Invalid GT help format option"
 
     gt_answer = doc.get("answer", "").strip()
     
@@ -566,9 +674,14 @@ def _build_GT_help(doc, options, answer_format) -> str:
     elif answer_format == "8":
         # Provides centrois for all items
         return _format_centroids_prompt(doc)
+    elif answer_format == "9":
+        # Makes the semantic mapping
+        return _format_semantic_mapping(doc, gt_answer)
 
-    
-    
+    elif answer_format == "10":
+        # Makes the semantic override
+        return _format_semantic_override(doc, gt_answer)
+
     return ""
 
 def doc_to_visual(doc):
@@ -611,7 +724,7 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     bbox_context = _format_bbox_context(doc)
     question = doc.get("original_question") or _build_fallback_question(doc)
     options = _build_options(doc)
-    if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["1", "2", "3", "4", "5", "6", "7", "8"]:
+    if os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0") in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]:
         gt_help = _build_GT_help(doc, options, os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0"))
         if gt_help:
             post_prompt = gt_help + "\n" + post_prompt
@@ -723,7 +836,7 @@ def process_results(doc, results):
     gt_answer = _ground_truth_answer_letter(doc) or str(doc.get("answer", "")).strip() or doc.get("parent_gt_answer", "")
     gt_help_format = os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0")
     gt_help_text = doc.get("help", "")
-    if not gt_help_text and gt_help_format in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+    if not gt_help_text and gt_help_format in {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}:
         gt_help_text = _build_GT_help(doc, _build_options(doc), gt_help_format)
 
     score = 1.0 if pred_answer == gt_answer else 0.0
