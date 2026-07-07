@@ -37,7 +37,7 @@ AVAILABLE_SIMPLE_MODELS = {
     "egogpt": "EgoGPT",
     "from_log": "FromLog",
     "fuyu": "Fuyu",
-    "gemini_api": "GeminiAPI",
+    "gemini": "Gemini",
     "gpt4o_audio": "GPT4OAudio",
     "gemma3": "Gemma3",
     "gpt4v": "GPT4V",
@@ -116,6 +116,7 @@ AVAILABLE_SIMPLE_MODELS = {
 }
 
 AVAILABLE_CHAT_TEMPLATE_MODELS = {
+    "gemini": "Gemini",
     "bagel_lmms_engine": "BagelLmmsEngine",
     "fastvideo": "FastVideo",
     "internvl_hf": "InternVLHf",
@@ -148,6 +149,7 @@ AVAILABLE_CHAT_TEMPLATE_MODELS = {
 }
 
 MODEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "gemini": ("gemini_api",),
     "dummy": ("dummy_video_reader",),
     "openai": ("openai_compatible", "openai_compatible_chat"),
     "async_openai": ("async_openai_compatible_chat", "async_openai_compatible"),
