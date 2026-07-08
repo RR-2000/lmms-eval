@@ -112,6 +112,16 @@ def _parse_relative_vector(payload: dict) -> dict[str, float]:
     return vector
 
 
+def _parse_named_vector(payload: dict, field_name: str) -> dict[str, float]:
+    if not isinstance(payload, dict):
+        return {"right": 0.0, "up": 0.0, "front": 0.0}
+
+    raw_vector = payload.get(field_name)
+    if raw_vector is None:
+        return {"right": 0.0, "up": 0.0, "front": 0.0}
+    return _parse_relative_vector({field_name: raw_vector})
+
+
 def _parse_prediction(pred_text: str) -> dict:
     payload = _extract_json_blob(pred_text) or {}
     answer = payload.get("answer")
@@ -126,6 +136,7 @@ def _parse_prediction(pred_text: str) -> dict:
         "answer": str(answer).strip() if answer is not None else "",
         "target_object": str(target_object).strip() if target_object is not None else "",
         "relative_vector": _parse_relative_vector(payload),
+        "camera_vector": _parse_named_vector(payload, "camera_vector"),
         "scale_ratio": scale_ratio,
     }
 
@@ -205,6 +216,7 @@ def _get_gt_spec(doc) -> dict:
         "reference_object": "",
         "target_object": "",
         "vector": {"right": 0.0, "up": 0.0, "front": 0.0},
+        "camera_vector": None,
         "scale_ratio": None,
     }
 
@@ -255,9 +267,10 @@ def _get_gt_spec(doc) -> dict:
         spec["reference_object"] = anchor_name
         spec["target_object"] = target_name
         spec["scale_ratio"] = _scale_ratio(_get_object_record(doc, anchor_name), _get_object_record(doc, target_name))
+        spec["camera_vector"] = {"right": 0.0, "up": 0.0, "front": 1.0}
         rel = metadata.get("relative_local_coordinates", {}) or {}
         spec["vector"] = {
-            "right": float(rel.get("right", 0.0)),
+            "right": -float(rel.get("right", 0.0)),
             "up": float(rel.get("up", 0.0)),
             "front": float(rel.get("front", 0.0)),
         }
@@ -268,6 +281,7 @@ def _get_gt_spec(doc) -> dict:
         spec["reference_object"] = anchor_name
         spec["target_object"] = target_name
         spec["scale_ratio"] = _scale_ratio(_get_object_record(doc, anchor_name), _get_object_record(doc, target_name))
+        spec["camera_vector"] = {"right": 0.0, "up": 0.0, "front": 1.0}
         rel = metadata.get("correct_relative_local_coordinates", {}) or {}
         spec["vector"] = {
             "right": -float(rel.get("right", 0.0)),
@@ -337,10 +351,11 @@ def _build_task_instructions(doc) -> str:
                 f"Reference anchor object: {reference_object}",
                 f"Target object: {target_object}",
                 "Interpret the frame as standing at the anchor object and facing the camera.",
+                "Also provide `camera_vector`, the direction from the reference anchor object to the camera in this same canonical frame.",
                 f"Answer with the discrete relation word: `{answer}` is the gold label format.",
                 'JSON schema: {"answer":"<left|right|front|behind>","target_object":"'
                 + target_object
-                + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
+                + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
             ]
         )
     elif task_family == "object_centric_relative_position_multi":
@@ -351,8 +366,9 @@ def _build_task_instructions(doc) -> str:
                 f"Reference anchor object: {reference_object}",
                 f"Candidate target objects: {candidate_text}",
                 "Interpret the frame as standing at the anchor object and facing the camera.",
+                "Also provide `camera_vector`, the direction from the reference anchor object to the camera in this same canonical frame.",
                 f"Answer with the chosen target object name: `{answer}` is the gold label format.",
-                'JSON schema: {"answer":"<object name>","target_object":"<object name>","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
+                'JSON schema: {"answer":"<object name>","target_object":"<object name>","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
             ]
         )
 
@@ -371,6 +387,7 @@ def doc_to_target(doc):
             "answer": _ground_truth_answer_text(doc),
             "target_object": _get_gt_spec(doc)["target_object"],
             "relative_vector": _get_gt_spec(doc)["vector"],
+            "camera_vector": _get_gt_spec(doc)["camera_vector"],
             "scale_ratio": _get_gt_spec(doc)["scale_ratio"],
         },
         ensure_ascii=True,
@@ -414,6 +431,13 @@ def _scale_score(prediction: dict, gt_spec: dict) -> float:
     return 1.0 / (1.0 + abs(math.log(pred_scale / gt_scale)))
 
 
+def _camera_direction_cosine(prediction: dict, gt_spec: dict) -> tuple[float, float]:
+    gt_camera_vector = gt_spec.get("camera_vector")
+    if not gt_camera_vector:
+        return 0.0, 0.0
+    return _cosine_similarity(prediction["camera_vector"], gt_camera_vector), 1.0
+
+
 def _score_prediction(doc, pred_text: str) -> dict:
     gt_spec = _get_gt_spec(doc)
     prediction = _parse_prediction(pred_text)
@@ -423,6 +447,7 @@ def _score_prediction(doc, pred_text: str) -> dict:
     answer_correct_direction_wrong = 1.0 if answer_accuracy == 1.0 and axis_sign_accuracy == 0.0 else 0.0
     answer_wrong_direction_correct = 1.0 if answer_accuracy == 0.0 and axis_sign_accuracy == 1.0 else 0.0
     answer_and_direction_wrong = 1.0 if answer_accuracy == 0.0 and axis_sign_accuracy == 0.0 else 0.0
+    camera_direction_cosine, camera_direction_available = _camera_direction_cosine(prediction, gt_spec)
     vector_cosine = _cosine_similarity(prediction["relative_vector"], gt_spec["vector"])
     scale_score = _scale_score(prediction, gt_spec)
     combined_score = (answer_accuracy + axis_sign_accuracy + ((vector_cosine + 1.0) / 2.0) + scale_score) / 4.0
@@ -436,6 +461,8 @@ def _score_prediction(doc, pred_text: str) -> dict:
         "answer_correct_direction_wrong": answer_correct_direction_wrong,
         "answer_wrong_direction_correct": answer_wrong_direction_correct,
         "answer_and_direction_wrong": answer_and_direction_wrong,
+        "camera_direction_cosine": camera_direction_cosine,
+        "camera_direction_available": camera_direction_available,
         "vector_cosine": vector_cosine,
         "scale_score": scale_score,
         "combined_score": combined_score,
@@ -461,6 +488,8 @@ def process_results(doc, results):
         "answer_correct_direction_wrong": scores["answer_correct_direction_wrong"],
         "answer_wrong_direction_correct": scores["answer_wrong_direction_correct"],
         "answer_and_direction_wrong": scores["answer_and_direction_wrong"],
+        "camera_direction_cosine": scores["camera_direction_cosine"],
+        "camera_direction_available": scores["camera_direction_available"],
         "vector_cosine": scores["vector_cosine"],
         "scale_score": scores["scale_score"],
         "combined_score": scores["combined_score"],
@@ -473,6 +502,7 @@ def process_results(doc, results):
         "viewpoint_answer_correct_direction_wrong": {**base_entry, "score": scores["answer_correct_direction_wrong"]},
         "viewpoint_answer_wrong_direction_correct": {**base_entry, "score": scores["answer_wrong_direction_correct"]},
         "viewpoint_answer_and_direction_wrong": {**base_entry, "score": scores["answer_and_direction_wrong"]},
+        "viewpoint_reference_to_camera_cosine": {**base_entry, "score": scores["camera_direction_cosine"]},
         "viewpoint_vector_cosine": {**base_entry, "score": scores["vector_cosine"]},
         "viewpoint_scale_score": {**base_entry, "score": scores["scale_score"]},
         "viewpoint_combined_score": {**base_entry, "score": scores["combined_score"]},
@@ -492,6 +522,10 @@ def process_results(doc, results):
             "answer_correct_direction_wrong": scores["answer_correct_direction_wrong"],
             "answer_wrong_direction_correct": scores["answer_wrong_direction_correct"],
             "answer_and_direction_wrong": scores["answer_and_direction_wrong"],
+            "camera_direction_cosine": scores["camera_direction_cosine"],
+            "camera_direction_available": scores["camera_direction_available"],
+            "gt_camera_vector": scores["gt_spec"]["camera_vector"],
+            "pred_camera_vector": scores["prediction"]["camera_vector"],
             "vector_cosine": scores["vector_cosine"],
             "scale_score": scores["scale_score"],
             "combined_score": scores["combined_score"],
@@ -500,6 +534,22 @@ def process_results(doc, results):
 
     for family in TASK_FAMILIES:
         result_dict[f"{family}_viewpoint_combined_score"] = {**base_entry, "score": scores["combined_score"]}
+        result_dict[f"{family}_viewpoint_answer_and_direction_correct"] = {
+            **base_entry,
+            "score": scores["answer_and_direction_correct"],
+        }
+        result_dict[f"{family}_viewpoint_answer_correct_direction_wrong"] = {
+            **base_entry,
+            "score": scores["answer_correct_direction_wrong"],
+        }
+        result_dict[f"{family}_viewpoint_answer_wrong_direction_correct"] = {
+            **base_entry,
+            "score": scores["answer_wrong_direction_correct"],
+        }
+        result_dict[f"{family}_viewpoint_answer_and_direction_wrong"] = {
+            **base_entry,
+            "score": scores["answer_and_direction_wrong"],
+        }
     for difficulty_name in DIFFICULTIES:
         result_dict[f"{difficulty_name}_viewpoint_combined_score"] = {**base_entry, "score": scores["combined_score"]}
     return result_dict
@@ -545,6 +595,93 @@ def aggregate_viewpoint_answer_wrong_direction_correct(results):
 
 def aggregate_viewpoint_answer_and_direction_wrong(results):
     return _aggregate_metric(results, "score")
+
+
+def aggregate_viewpoint_reference_to_camera_cosine(results):
+    available = [r for r in results if float(r.get("camera_direction_available", 0.0)) > 0.0]
+    if not available:
+        return 0.0
+    return sum(float(r.get("camera_direction_cosine", 0.0)) for r in available) / len(available)
+
+
+def aggregate_camera_relative_position_viewpoint_answer_and_direction_correct(results):
+    return _aggregate_metric(results, "answer_and_direction_correct", task_family="camera_relative_position")
+
+
+def aggregate_camera_relative_position_viewpoint_answer_correct_direction_wrong(results):
+    return _aggregate_metric(results, "answer_correct_direction_wrong", task_family="camera_relative_position")
+
+
+def aggregate_camera_relative_position_viewpoint_answer_wrong_direction_correct(results):
+    return _aggregate_metric(results, "answer_wrong_direction_correct", task_family="camera_relative_position")
+
+
+def aggregate_camera_relative_position_viewpoint_answer_and_direction_wrong(results):
+    return _aggregate_metric(results, "answer_and_direction_wrong", task_family="camera_relative_position")
+
+
+def aggregate_camera_distance_viewpoint_answer_and_direction_correct(results):
+    return _aggregate_metric(results, "answer_and_direction_correct", task_family="camera_distance")
+
+
+def aggregate_camera_distance_viewpoint_answer_correct_direction_wrong(results):
+    return _aggregate_metric(results, "answer_correct_direction_wrong", task_family="camera_distance")
+
+
+def aggregate_camera_distance_viewpoint_answer_wrong_direction_correct(results):
+    return _aggregate_metric(results, "answer_wrong_direction_correct", task_family="camera_distance")
+
+
+def aggregate_camera_distance_viewpoint_answer_and_direction_wrong(results):
+    return _aggregate_metric(results, "answer_and_direction_wrong", task_family="camera_distance")
+
+
+def aggregate_height_relative_3d_viewpoint_answer_and_direction_correct(results):
+    return _aggregate_metric(results, "answer_and_direction_correct", task_family="height_relative_3d")
+
+
+def aggregate_height_relative_3d_viewpoint_answer_correct_direction_wrong(results):
+    return _aggregate_metric(results, "answer_correct_direction_wrong", task_family="height_relative_3d")
+
+
+def aggregate_height_relative_3d_viewpoint_answer_wrong_direction_correct(results):
+    return _aggregate_metric(results, "answer_wrong_direction_correct", task_family="height_relative_3d")
+
+
+def aggregate_height_relative_3d_viewpoint_answer_and_direction_wrong(results):
+    return _aggregate_metric(results, "answer_and_direction_wrong", task_family="height_relative_3d")
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_and_direction_correct(results):
+    return _aggregate_metric(results, "answer_and_direction_correct", task_family="object_centric_relative_position")
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_correct_direction_wrong(results):
+    return _aggregate_metric(results, "answer_correct_direction_wrong", task_family="object_centric_relative_position")
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_wrong_direction_correct(results):
+    return _aggregate_metric(results, "answer_wrong_direction_correct", task_family="object_centric_relative_position")
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_and_direction_wrong(results):
+    return _aggregate_metric(results, "answer_and_direction_wrong", task_family="object_centric_relative_position")
+
+
+def aggregate_object_centric_relative_position_multi_viewpoint_answer_and_direction_correct(results):
+    return _aggregate_metric(results, "answer_and_direction_correct", task_family="object_centric_relative_position_multi")
+
+
+def aggregate_object_centric_relative_position_multi_viewpoint_answer_correct_direction_wrong(results):
+    return _aggregate_metric(results, "answer_correct_direction_wrong", task_family="object_centric_relative_position_multi")
+
+
+def aggregate_object_centric_relative_position_multi_viewpoint_answer_wrong_direction_correct(results):
+    return _aggregate_metric(results, "answer_wrong_direction_correct", task_family="object_centric_relative_position_multi")
+
+
+def aggregate_object_centric_relative_position_multi_viewpoint_answer_and_direction_wrong(results):
+    return _aggregate_metric(results, "answer_and_direction_wrong", task_family="object_centric_relative_position_multi")
 
 
 def aggregate_viewpoint_combined_score(results):

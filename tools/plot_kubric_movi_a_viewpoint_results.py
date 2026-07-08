@@ -1,0 +1,546 @@
+#!/usr/bin/env python3
+"""Plot Kubric MOVi-A viewpoint metrics and generate simple inferences."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+import matplotlib.pyplot as plt
+
+
+DEFAULT_INPUT = Path(
+    "/home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred/"
+    "Qwen__Qwen3-VL-4B-Instruct/20260708_112529_results.json"
+)
+
+FAMILIES = [
+    "camera_relative_position",
+    "camera_distance",
+    "height_relative_3d",
+    "object_centric_relative_position",
+    "object_centric_relative_position_multi",
+]
+
+CASE_METRICS = [
+    "answer_and_direction_correct",
+    "answer_correct_direction_wrong",
+    "answer_wrong_direction_correct",
+    "answer_and_direction_wrong",
+]
+
+CASE_LABELS = {
+    "answer_and_direction_correct": "Answer+Direction Correct",
+    "answer_correct_direction_wrong": "Answer Correct, Direction Wrong",
+    "answer_wrong_direction_correct": "Answer Wrong, Direction Correct",
+    "answer_and_direction_wrong": "Answer+Direction Wrong",
+}
+
+CASE_COLORS = {
+    "answer_and_direction_correct": "#2A9D8F",
+    "answer_correct_direction_wrong": "#E9C46A",
+    "answer_wrong_direction_correct": "#F4A261",
+    "answer_and_direction_wrong": "#E76F51",
+}
+
+FAMILY_DISPLAY = {
+    "camera_relative_position": "Camera Relative",
+    "camera_distance": "Camera Distance",
+    "height_relative_3d": "Height 3D",
+    "object_centric_relative_position": "Object-Centric",
+    "object_centric_relative_position_multi": "Object-Centric Multi",
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Plot Kubric MOVi-A viewpoint metrics and infer failure modes."
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_INPUT,
+        help="Path to an LMMS result JSON.",
+    )
+    parser.add_argument(
+        "--task",
+        default="kubric_movi_a_viewpoint",
+        help="Task key inside the LMMS result JSON.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for plots and reports. Defaults next to the input JSON.",
+    )
+    return parser.parse_args()
+
+
+def load_task_results(path: Path, task_name: str) -> dict[str, Any]:
+    payload = json.loads(path.read_text())
+    results = payload.get("results", {}).get(task_name)
+    if not isinstance(results, dict):
+        raise KeyError(f"Task '{task_name}' not found in {path}")
+    return results
+
+
+def metric_value(results: dict[str, Any], metric_name: str) -> float | None:
+    value = results.get(f"{metric_name},none")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def family_metric_value(results: dict[str, Any], family: str, suffix: str) -> float | None:
+    return metric_value(results, f"{family}_viewpoint_{suffix}")
+
+
+def overall_metrics(results: dict[str, Any]) -> dict[str, float]:
+    keys = [
+        "viewpoint_answer_accuracy",
+        "viewpoint_axis_sign_accuracy",
+        "viewpoint_answer_and_direction_correct",
+        "viewpoint_answer_correct_direction_wrong",
+        "viewpoint_answer_wrong_direction_correct",
+        "viewpoint_answer_and_direction_wrong",
+        "viewpoint_reference_to_camera_cosine",
+        "viewpoint_vector_cosine",
+        "viewpoint_scale_score",
+        "viewpoint_combined_score",
+    ]
+    return {key: metric_value(results, key) or 0.0 for key in keys}
+
+
+def family_case_metrics(results: dict[str, Any]) -> dict[str, dict[str, float]]:
+    family_cases: dict[str, dict[str, float]] = {}
+    for family in FAMILIES:
+        family_cases[family] = {
+            case: family_metric_value(results, family, case) or 0.0 for case in CASE_METRICS
+        }
+    return family_cases
+
+
+def ensure_output_dir(input_path: Path, output_dir: Path | None) -> Path:
+    if output_dir is None:
+        output_dir = input_path.parent / f"{input_path.stem}_analysis"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def plot_overall_scores(metrics: dict[str, float], output_dir: Path) -> Path:
+    labels = [
+        "Answer",
+        "Direction Sign",
+        "Both Correct",
+        "Answer Only",
+        "Direction Only",
+        "Both Wrong",
+        "Ref->Cam Cos",
+        "Vector Cos",
+        "Scale",
+        "Combined",
+    ]
+    values = [
+        metrics["viewpoint_answer_accuracy"],
+        metrics["viewpoint_axis_sign_accuracy"],
+        metrics["viewpoint_answer_and_direction_correct"],
+        metrics["viewpoint_answer_correct_direction_wrong"],
+        metrics["viewpoint_answer_wrong_direction_correct"],
+        metrics["viewpoint_answer_and_direction_wrong"],
+        metrics["viewpoint_reference_to_camera_cosine"],
+        metrics["viewpoint_vector_cosine"],
+        metrics["viewpoint_scale_score"],
+        metrics["viewpoint_combined_score"],
+    ]
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    bars = ax.bar(labels, values, color="#457B9D")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Kubric MOVi-A Viewpoint Overall Metrics")
+    ax.tick_params(axis="x", rotation=35)
+    ax.grid(axis="y", alpha=0.25)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2.0, value + 0.015, f"{value:.3f}", ha="center", va="bottom", fontsize=9)
+    fig.tight_layout()
+
+    output_path = output_dir / "overall_metrics.png"
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    return output_path
+
+
+def plot_overall_case_split(metrics: dict[str, float], output_dir: Path) -> Path:
+    fig, ax = plt.subplots(figsize=(10, 3))
+    left = 0.0
+    for case in CASE_METRICS:
+        value = metrics[f"viewpoint_{case}"]
+        ax.barh(
+            ["Overall"],
+            [value],
+            left=left,
+            color=CASE_COLORS[case],
+            label=CASE_LABELS[case],
+        )
+        if value > 0.04:
+            ax.text(left + value / 2.0, 0, f"{value:.3f}", ha="center", va="center", fontsize=9)
+        left += value
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel("Fraction of samples")
+    ax.set_title("Overall Answer/Direction Outcome Split")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.35), ncol=2, frameon=False)
+    fig.tight_layout()
+
+    output_path = output_dir / "overall_case_split.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_family_case_splits(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    families = list(family_cases.keys())
+    left = [0.0] * len(families)
+    for case in CASE_METRICS:
+        values = [family_cases[family][case] for family in families]
+        ax.barh(
+            families,
+            values,
+            left=left,
+            color=CASE_COLORS[case],
+            label=CASE_LABELS[case],
+        )
+        left = [current + value for current, value in zip(left, values)]
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel("Fraction of samples")
+    ax.set_title("Per-Family Answer/Direction Outcome Split")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False)
+    fig.tight_layout()
+
+    output_path = output_dir / "family_case_splits.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_overall_case_pie(metrics: dict[str, float], output_dir: Path) -> Path:
+    values = [metrics[f"viewpoint_{case}"] for case in CASE_METRICS]
+    labels = [CASE_LABELS[case] for case in CASE_METRICS]
+    colors = [CASE_COLORS[case] for case in CASE_METRICS]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    wedges, texts, autotexts = ax.pie(
+        values,
+        labels=labels,
+        colors=colors,
+        autopct=lambda pct: f"{pct:.1f}%",
+        startangle=110,
+        counterclock=False,
+        wedgeprops={"linewidth": 1.0, "edgecolor": "white"},
+        textprops={"fontsize": 10},
+    )
+    for autotext in autotexts:
+        autotext.set_color("black")
+        autotext.set_fontsize(10)
+        autotext.set_weight("bold")
+    ax.set_title("Overall Outcome Split", pad=14)
+    fig.tight_layout()
+
+    output_path = output_dir / "overall_case_pie.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_family_case_pies(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
+    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    axes = axes.flatten()
+    colors = [CASE_COLORS[case] for case in CASE_METRICS]
+
+    for ax, family in zip(axes, FAMILIES):
+        values = [family_cases[family][case] for case in CASE_METRICS]
+        labels = [CASE_LABELS[case] for case in CASE_METRICS]
+        ax.pie(
+            values,
+            labels=labels,
+            colors=colors,
+            autopct=lambda pct: f"{pct:.1f}%" if pct >= 7 else "",
+            startangle=110,
+            counterclock=False,
+            wedgeprops={"linewidth": 1.0, "edgecolor": "white"},
+            textprops={"fontsize": 8},
+        )
+        ax.set_title(FAMILY_DISPLAY[family], fontsize=11)
+
+    if len(axes) > len(FAMILIES):
+        axes[-1].axis("off")
+
+    fig.suptitle("Per-Family Outcome Pie Charts", fontsize=14, y=0.98)
+    fig.tight_layout()
+
+    output_path = output_dir / "family_case_pies.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_family_correctness(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
+    families = list(family_cases.keys())
+    both_correct = [family_cases[family]["answer_and_direction_correct"] for family in families]
+    both_wrong = [family_cases[family]["answer_and_direction_wrong"] for family in families]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    x = range(len(families))
+    width = 0.38
+    ax.bar([i - width / 2 for i in x], both_correct, width=width, color="#2A9D8F", label="Both Correct")
+    ax.bar([i + width / 2 for i in x], both_wrong, width=width, color="#E76F51", label="Both Wrong")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(families, rotation=25, ha="right")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Fraction of samples")
+    ax.set_title("Best vs Worst Joint Outcome by Task Family")
+    ax.legend(frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+
+    output_path = output_dir / "family_best_worst.png"
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    return output_path
+
+
+def plot_family_case_grouped_bars(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
+    families = list(family_cases.keys())
+    x = range(len(families))
+    width = 0.2
+
+    fig, ax = plt.subplots(figsize=(12, 5.5))
+    for idx, case in enumerate(CASE_METRICS):
+        values = [family_cases[family][case] for family in families]
+        positions = [i + (idx - 1.5) * width for i in x]
+        ax.bar(
+            positions,
+            values,
+            width=width,
+            color=CASE_COLORS[case],
+            label=CASE_LABELS[case],
+        )
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([FAMILY_DISPLAY[family] for family in families], rotation=20, ha="right")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Fraction of samples")
+    ax.set_title("Per-Family Outcome Breakdown")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False, ncol=2)
+    fig.tight_layout()
+
+    output_path = output_dir / "family_case_grouped_bars.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_family_summary_bars(metrics: dict[str, float], family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
+    families = list(family_cases.keys())
+    answer_rates = [
+        family_cases[family]["answer_and_direction_correct"] + family_cases[family]["answer_correct_direction_wrong"]
+        for family in families
+    ]
+    direction_rates = [
+        family_cases[family]["answer_and_direction_correct"] + family_cases[family]["answer_wrong_direction_correct"]
+        for family in families
+    ]
+    both_correct = [family_cases[family]["answer_and_direction_correct"] for family in families]
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    x = range(len(families))
+    width = 0.25
+    ax.bar([i - width for i in x], answer_rates, width=width, color="#457B9D", label="Answer Accuracy")
+    ax.bar([i for i in x], direction_rates, width=width, color="#8D99AE", label="Direction Accuracy")
+    ax.bar([i + width for i in x], both_correct, width=width, color="#2A9D8F", label="Both Correct")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([FAMILY_DISPLAY[family] for family in families], rotation=20, ha="right")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Fraction of samples")
+    ax.set_title("Family-Level Accuracy Summary")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+
+    output_path = output_dir / "family_accuracy_summary.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def infer_metrics(metrics: dict[str, float], family_cases: dict[str, dict[str, float]]) -> list[str]:
+    notes: list[str] = []
+
+    answer = metrics["viewpoint_answer_accuracy"]
+    direction = metrics["viewpoint_axis_sign_accuracy"]
+    answer_only = metrics["viewpoint_answer_correct_direction_wrong"]
+    direction_only = metrics["viewpoint_answer_wrong_direction_correct"]
+    both_correct = metrics["viewpoint_answer_and_direction_correct"]
+    both_wrong = metrics["viewpoint_answer_and_direction_wrong"]
+    vector_cos = metrics["viewpoint_vector_cosine"]
+    scale = metrics["viewpoint_scale_score"]
+    ref_cam = metrics["viewpoint_reference_to_camera_cosine"]
+
+    if answer - direction > 0.15:
+        notes.append(
+            f"Answer accuracy ({answer:.3f}) is much higher than direction-sign accuracy ({direction:.3f}), suggesting the model often selects the right label without recovering the underlying spatial direction."
+        )
+
+    if answer_only > direction_only + 0.10:
+        notes.append(
+            f"`Answer correct, direction wrong` ({answer_only:.3f}) is much larger than `answer wrong, direction correct` ({direction_only:.3f}), which points to answer priors or shortcut object selection being stronger than geometric consistency."
+        )
+
+    if both_wrong > 0.25:
+        notes.append(
+            f"`Both wrong` remains substantial at {both_wrong:.3f}, so a large slice of the benchmark is still failing at both the discrete and geometric levels."
+        )
+
+    if vector_cos < 0.10:
+        notes.append(
+            f"Vector cosine is very low ({vector_cos:.3f}), indicating that the continuous direction vectors are close to random or are not being followed by the model even when some discrete answers are correct."
+        )
+
+    if 0.35 <= scale <= 0.65:
+        notes.append(
+            f"Scale score is mid-range ({scale:.3f}), which suggests the model captures some apparent-size information but not reliably enough to support precise geometric prediction."
+        )
+
+    if ref_cam <= 0.05:
+        notes.append(
+            f"Reference-to-camera cosine is effectively zero ({ref_cam:.3f}); in practice this usually means the model is not emitting a meaningful `camera_vector` field yet."
+        )
+
+    object_single = family_cases["object_centric_relative_position"]
+    object_multi = family_cases["object_centric_relative_position_multi"]
+    camera_rel = family_cases["camera_relative_position"]
+    camera_dist = family_cases["camera_distance"]
+    height = family_cases["height_relative_3d"]
+
+    if object_single["answer_and_direction_wrong"] > 0.50:
+        notes.append(
+            f"Single-target object-centric reasoning is the clearest bottleneck: `both wrong` is {object_single['answer_and_direction_wrong']:.3f}, which suggests difficulty transforming into the anchor-centered, camera-facing frame."
+        )
+
+    if object_multi["answer_wrong_direction_correct"] > 0.25:
+        notes.append(
+            f"Multi-target object-centric reasoning shows a different error mode: `answer wrong, direction correct` is {object_multi['answer_wrong_direction_correct']:.3f}, suggesting the model often gets the side/front-behind geometry roughly right but fails candidate selection."
+        )
+
+    if camera_rel["answer_correct_direction_wrong"] > 0.45:
+        notes.append(
+            f"Camera-relative position has a strong `answer correct, direction wrong` pattern ({camera_rel['answer_correct_direction_wrong']:.3f}); object identification appears easier than producing a faithful signed vector."
+        )
+
+    if camera_dist["answer_and_direction_correct"] >= max(
+        camera_rel["answer_and_direction_correct"],
+        height["answer_and_direction_correct"],
+        object_single["answer_and_direction_correct"],
+        object_multi["answer_and_direction_correct"],
+    ):
+        notes.append(
+            f"Camera-distance is the strongest family on joint correctness ({camera_dist['answer_and_direction_correct']:.3f}), implying depth-order judgments are currently easier for the model than anchor-centric viewpoint reasoning."
+        )
+
+    if height["answer_correct_direction_wrong"] > height["answer_and_direction_correct"]:
+        notes.append(
+            f"Height-relative 3D questions still show more `answer correct, direction wrong` ({height['answer_correct_direction_wrong']:.3f}) than full success ({height['answer_and_direction_correct']:.3f}), so the model often knows which object to pick without producing a consistent signed `up` value."
+        )
+
+    return notes
+
+
+def write_inference_report(
+    metrics: dict[str, float],
+    family_cases: dict[str, dict[str, float]],
+    output_dir: Path,
+    input_path: Path,
+) -> tuple[Path, Path]:
+    inferences = infer_metrics(metrics, family_cases)
+
+    txt_lines = [
+        f"Input: {input_path}",
+        "",
+        "Overall metrics:",
+    ]
+    for key, value in metrics.items():
+        txt_lines.append(f"- {key}: {value:.6f}")
+
+    txt_lines.append("")
+    txt_lines.append("Per-family case splits:")
+    for family, case_values in family_cases.items():
+        txt_lines.append(f"- {family}:")
+        for case in CASE_METRICS:
+            txt_lines.append(f"  - {case}: {case_values[case]:.6f}")
+
+    txt_lines.append("")
+    txt_lines.append("Inferences:")
+    for note in inferences:
+        txt_lines.append(f"- {note}")
+
+    txt_path = output_dir / "inference_report.txt"
+    txt_path.write_text("\n".join(txt_lines) + "\n")
+
+    md_lines = [
+        "# Kubric MOVi-A Viewpoint Result Analysis",
+        "",
+        f"Input: `{input_path}`",
+        "",
+        "## Overall Metrics",
+    ]
+    for key, value in metrics.items():
+        md_lines.append(f"- `{key}`: `{value:.6f}`")
+
+    md_lines.append("")
+    md_lines.append("## Per-Family Case Splits")
+    for family, case_values in family_cases.items():
+        md_lines.append(f"### `{family}`")
+        for case in CASE_METRICS:
+            md_lines.append(f"- `{case}`: `{case_values[case]:.6f}`")
+        md_lines.append("")
+
+    md_lines.append("## Inferences")
+    for note in inferences:
+        md_lines.append(f"- {note}")
+
+    md_path = output_dir / "inference_report.md"
+    md_path.write_text("\n".join(md_lines) + "\n")
+    return txt_path, md_path
+
+
+def main() -> int:
+    args = parse_args()
+    results = load_task_results(args.input, args.task)
+    metrics = overall_metrics(results)
+    family_cases = family_case_metrics(results)
+    output_dir = ensure_output_dir(args.input, args.output_dir)
+
+    outputs = [
+        plot_overall_scores(metrics, output_dir),
+        plot_overall_case_split(metrics, output_dir),
+        plot_overall_case_pie(metrics, output_dir),
+        plot_family_case_splits(family_cases, output_dir),
+        plot_family_case_pies(family_cases, output_dir),
+        plot_family_case_grouped_bars(family_cases, output_dir),
+        plot_family_summary_bars(metrics, family_cases, output_dir),
+        plot_family_correctness(family_cases, output_dir),
+    ]
+    report_txt, report_md = write_inference_report(metrics, family_cases, output_dir, args.input)
+    outputs.extend([report_txt, report_md])
+
+    print("Generated analysis artifacts:")
+    for output in outputs:
+        print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
