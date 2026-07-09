@@ -22,6 +22,8 @@ FAMILIES = [
     "height_relative_3d",
     "object_centric_relative_position",
     "object_centric_relative_position_multi",
+    "object_centric_direction_binary",
+    "object_centric_camera_pose",
 ]
 
 CASE_METRICS = [
@@ -51,6 +53,89 @@ FAMILY_DISPLAY = {
     "height_relative_3d": "Height 3D",
     "object_centric_relative_position": "Object-Centric",
     "object_centric_relative_position_multi": "Object-Centric Multi",
+    "object_centric_direction_binary": "Obj-Centric Binary",
+    "object_centric_camera_pose": "Camera Pose",
+}
+
+OBJECT_CENTRIC_SINGLE_METRICS = [
+    "object_centric_relative_position_camera_direction_cosine",
+    "object_centric_relative_position_right_sign_accuracy",
+    "object_centric_relative_position_front_sign_accuracy",
+    "object_centric_relative_position_full_sign_accuracy",
+    "object_centric_relative_position_camera_front_sign_accuracy",
+    "object_centric_relative_position_camera_vector_nonzero",
+]
+
+OBJECT_CENTRIC_MULTI_METRICS = [
+    "object_centric_relative_position_multi_camera_direction_cosine",
+    "object_centric_relative_position_multi_right_sign_accuracy",
+    "object_centric_relative_position_multi_front_sign_accuracy",
+    "object_centric_relative_position_multi_full_sign_accuracy",
+    "object_centric_relative_position_multi_camera_front_sign_accuracy",
+    "object_centric_relative_position_multi_camera_vector_nonzero",
+    "object_centric_relative_position_multi_candidate_aware_direction_accuracy",
+    "object_centric_relative_position_multi_direction_given_predicted_object_accuracy",
+    "object_centric_relative_position_multi_ranking_accuracy_on_relation_axis",
+    "object_centric_relative_position_multi_ranking_score_on_relation_axis",
+    "object_centric_relative_position_multi_predicted_target_in_candidate_set",
+]
+
+OBJECT_CENTRIC_BINARY_METRICS = [
+    "object_centric_direction_binary_camera_direction_cosine",
+    "object_centric_direction_binary_camera_distance_score",
+    "object_centric_direction_binary_camera_right_sign_accuracy",
+    "object_centric_direction_binary_camera_up_sign_accuracy",
+    "object_centric_direction_binary_camera_front_sign_accuracy",
+    "object_centric_direction_binary_camera_full_sign_accuracy",
+    "object_centric_direction_binary_right_sign_accuracy",
+    "object_centric_direction_binary_front_sign_accuracy",
+    "object_centric_direction_binary_full_sign_accuracy",
+    "object_centric_direction_binary_camera_vector_nonzero",
+]
+
+OBJECT_CENTRIC_CAMERA_POSE_METRICS = [
+    "object_centric_camera_pose_camera_direction_cosine",
+    "object_centric_camera_pose_camera_distance_score",
+    "object_centric_camera_pose_camera_right_sign_accuracy",
+    "object_centric_camera_pose_camera_up_sign_accuracy",
+    "object_centric_camera_pose_camera_front_sign_accuracy",
+    "object_centric_camera_pose_camera_full_sign_accuracy",
+]
+
+METRIC_LABELS = {
+    "object_centric_relative_position_camera_direction_cosine": "Camera Vector Cosine",
+    "object_centric_relative_position_right_sign_accuracy": "Right Sign",
+    "object_centric_relative_position_front_sign_accuracy": "Front Sign",
+    "object_centric_relative_position_full_sign_accuracy": "Right+Front Both",
+    "object_centric_relative_position_camera_front_sign_accuracy": "Camera Front Sign",
+    "object_centric_relative_position_camera_vector_nonzero": "Camera Vector Nonzero",
+    "object_centric_relative_position_multi_camera_direction_cosine": "Camera Vector Cosine",
+    "object_centric_relative_position_multi_right_sign_accuracy": "Right Sign",
+    "object_centric_relative_position_multi_front_sign_accuracy": "Front Sign",
+    "object_centric_relative_position_multi_full_sign_accuracy": "Right+Front Both",
+    "object_centric_relative_position_multi_camera_front_sign_accuracy": "Camera Front Sign",
+    "object_centric_relative_position_multi_camera_vector_nonzero": "Camera Vector Nonzero",
+    "object_centric_relative_position_multi_candidate_aware_direction_accuracy": "Chosen Candidate On Correct Side",
+    "object_centric_relative_position_multi_direction_given_predicted_object_accuracy": "Vector Matches Chosen Candidate",
+    "object_centric_relative_position_multi_ranking_accuracy_on_relation_axis": "Top Candidate Chosen",
+    "object_centric_relative_position_multi_ranking_score_on_relation_axis": "Candidate Rank Score",
+    "object_centric_relative_position_multi_predicted_target_in_candidate_set": "Predicted Target In Candidates",
+    "object_centric_direction_binary_camera_direction_cosine": "Camera Vector Cosine",
+    "object_centric_direction_binary_camera_distance_score": "Camera Distance Score",
+    "object_centric_direction_binary_camera_right_sign_accuracy": "Camera Right Sign",
+    "object_centric_direction_binary_camera_up_sign_accuracy": "Camera Up Sign",
+    "object_centric_direction_binary_camera_front_sign_accuracy": "Camera Front Sign",
+    "object_centric_direction_binary_camera_full_sign_accuracy": "Camera Full Sign",
+    "object_centric_direction_binary_right_sign_accuracy": "Target Right Sign",
+    "object_centric_direction_binary_front_sign_accuracy": "Target Front Sign",
+    "object_centric_direction_binary_full_sign_accuracy": "Target Right+Front",
+    "object_centric_direction_binary_camera_vector_nonzero": "Camera Vector Nonzero",
+    "object_centric_camera_pose_camera_direction_cosine": "Camera Vector Cosine",
+    "object_centric_camera_pose_camera_distance_score": "Camera Distance Score",
+    "object_centric_camera_pose_camera_right_sign_accuracy": "Camera Right Sign",
+    "object_centric_camera_pose_camera_up_sign_accuracy": "Camera Up Sign",
+    "object_centric_camera_pose_camera_front_sign_accuracy": "Camera Front Sign",
+    "object_centric_camera_pose_camera_full_sign_accuracy": "Camera Full Sign",
 }
 
 
@@ -118,6 +203,10 @@ def family_case_metrics(results: dict[str, Any]) -> dict[str, dict[str, float]]:
             case: family_metric_value(results, family, case) or 0.0 for case in CASE_METRICS
         }
     return family_cases
+
+
+def named_metrics(results: dict[str, Any], metric_names: list[str]) -> dict[str, float]:
+    return {name: metric_value(results, name) or 0.0 for name in metric_names}
 
 
 def ensure_output_dir(input_path: Path, output_dir: Path | None) -> Path:
@@ -255,7 +344,10 @@ def plot_overall_case_pie(metrics: dict[str, float], output_dir: Path) -> Path:
 
 
 def plot_family_case_pies(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
-    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    num_families = len(FAMILIES)
+    cols = 3
+    rows = (num_families + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(14, 4.5 * rows))
     axes = axes.flatten()
     colors = [CASE_COLORS[case] for case in CASE_METRICS]
 
@@ -274,8 +366,8 @@ def plot_family_case_pies(family_cases: dict[str, dict[str, float]], output_dir:
         )
         ax.set_title(FAMILY_DISPLAY[family], fontsize=11)
 
-    if len(axes) > len(FAMILIES):
-        axes[-1].axis("off")
+    for ax in axes[len(FAMILIES) :]:
+        ax.axis("off")
 
     fig.suptitle("Per-Family Outcome Pie Charts", fontsize=14, y=0.98)
     fig.tight_layout()
@@ -376,6 +468,236 @@ def plot_family_summary_bars(metrics: dict[str, float], family_cases: dict[str, 
     return output_path
 
 
+def plot_object_centric_single_metrics(single_metrics: dict[str, float], output_dir: Path) -> Path:
+    metric_names = OBJECT_CENTRIC_SINGLE_METRICS
+    labels = [METRIC_LABELS[name] for name in metric_names]
+    values = [single_metrics[name] for name in metric_names]
+    colors = ["#3A86FF", "#2A9D8F", "#E9C46A", "#1D3557", "#F4A261", "#8D99AE"]
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.5))
+    bars = ax.bar(labels, values, color=colors)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Object-Centric Single-Target Diagnostics")
+    ax.tick_params(axis="x", rotation=25)
+    ax.grid(axis="y", alpha=0.25)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2.0, value + 0.015, f"{value:.3f}", ha="center", va="bottom", fontsize=9)
+    fig.tight_layout()
+
+    output_path = output_dir / "object_centric_single_metrics.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_object_centric_multi_metrics(multi_metrics: dict[str, float], output_dir: Path) -> Path:
+    metric_names = OBJECT_CENTRIC_MULTI_METRICS
+    labels = [METRIC_LABELS[name] for name in metric_names]
+    values = [multi_metrics[name] for name in metric_names]
+    colors = [
+        "#3A86FF",
+        "#2A9D8F",
+        "#E9C46A",
+        "#1D3557",
+        "#F4A261",
+        "#8D99AE",
+        "#577590",
+        "#43AA8B",
+        "#F8961E",
+        "#277DA1",
+        "#90BE6D",
+    ]
+
+    fig, ax = plt.subplots(figsize=(14, 6.5))
+    bars = ax.bar(labels, values, color=colors)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Object-Centric Multi-Target Diagnostics")
+    ax.tick_params(axis="x", rotation=33)
+    ax.grid(axis="y", alpha=0.25)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2.0, value + 0.015, f"{value:.3f}", ha="center", va="bottom", fontsize=8)
+    fig.tight_layout()
+
+    output_path = output_dir / "object_centric_multi_metrics.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_object_centric_sign_comparison(
+    single_metrics: dict[str, float],
+    multi_metrics: dict[str, float],
+    output_dir: Path,
+) -> Path:
+    labels = ["Right Sign", "Front Sign", "Right+Front Both"]
+    single_values = [
+        single_metrics["object_centric_relative_position_right_sign_accuracy"],
+        single_metrics["object_centric_relative_position_front_sign_accuracy"],
+        single_metrics["object_centric_relative_position_full_sign_accuracy"],
+    ]
+    multi_values = [
+        multi_metrics["object_centric_relative_position_multi_right_sign_accuracy"],
+        multi_metrics["object_centric_relative_position_multi_front_sign_accuracy"],
+        multi_metrics["object_centric_relative_position_multi_full_sign_accuracy"],
+    ]
+
+    fig, ax = plt.subplots(figsize=(9.5, 5))
+    x = range(len(labels))
+    width = 0.36
+    ax.bar([i - width / 2 for i in x], single_values, width=width, color="#2A9D8F", label="Single Target")
+    ax.bar([i + width / 2 for i in x], multi_values, width=width, color="#F4A261", label="Multi Target")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Object-Centric Sign Accuracy Comparison")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+
+    output_path = output_dir / "object_centric_sign_comparison.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_object_centric_camera_comparison(
+    single_metrics: dict[str, float],
+    multi_metrics: dict[str, float],
+    output_dir: Path,
+) -> Path:
+    labels = ["Camera Cosine", "Camera Front Sign", "Camera Vector Nonzero"]
+    single_values = [
+        single_metrics["object_centric_relative_position_camera_direction_cosine"],
+        single_metrics["object_centric_relative_position_camera_front_sign_accuracy"],
+        single_metrics["object_centric_relative_position_camera_vector_nonzero"],
+    ]
+    multi_values = [
+        multi_metrics["object_centric_relative_position_multi_camera_direction_cosine"],
+        multi_metrics["object_centric_relative_position_multi_camera_front_sign_accuracy"],
+        multi_metrics["object_centric_relative_position_multi_camera_vector_nonzero"],
+    ]
+
+    fig, ax = plt.subplots(figsize=(9.5, 5))
+    x = range(len(labels))
+    width = 0.36
+    ax.bar([i - width / 2 for i in x], single_values, width=width, color="#457B9D", label="Single Target")
+    ax.bar([i + width / 2 for i in x], multi_values, width=width, color="#8D99AE", label="Multi Target")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Object-Centric Camera-Vector Diagnostics")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+
+    output_path = output_dir / "object_centric_camera_comparison.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_object_centric_multi_selection_metrics(multi_metrics: dict[str, float], output_dir: Path) -> Path:
+    metric_names = [
+        "object_centric_relative_position_multi_candidate_aware_direction_accuracy",
+        "object_centric_relative_position_multi_direction_given_predicted_object_accuracy",
+        "object_centric_relative_position_multi_ranking_accuracy_on_relation_axis",
+        "object_centric_relative_position_multi_ranking_score_on_relation_axis",
+        "object_centric_relative_position_multi_predicted_target_in_candidate_set",
+    ]
+    labels = [METRIC_LABELS[name] for name in metric_names]
+    values = [multi_metrics[name] for name in metric_names]
+    colors = ["#577590", "#43AA8B", "#F8961E", "#277DA1", "#90BE6D"]
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.5))
+    bars = ax.bar(labels, values, color=colors)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Object-Centric Multi-Target Selection Diagnostics")
+    ax.tick_params(axis="x", rotation=20)
+    ax.grid(axis="y", alpha=0.25)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2.0, value + 0.015, f"{value:.3f}", ha="center", va="bottom", fontsize=9)
+    fig.tight_layout()
+
+    output_path = output_dir / "object_centric_multi_selection_metrics.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_object_centric_multi_selection_pie(multi_metrics: dict[str, float], output_dir: Path) -> Path:
+    labels = [
+        "Top Candidate Chosen",
+        "In Candidate Set But Not Top",
+        "Outside Candidate Set / Missing",
+    ]
+    top = multi_metrics["object_centric_relative_position_multi_ranking_accuracy_on_relation_axis"]
+    in_set = multi_metrics["object_centric_relative_position_multi_predicted_target_in_candidate_set"]
+    outside = max(0.0, 1.0 - in_set)
+    mid = max(0.0, in_set - top)
+    values = [top, mid, outside]
+    colors = ["#2A9D8F", "#E9C46A", "#E76F51"]
+
+    fig, ax = plt.subplots(figsize=(8.5, 6))
+    _, _, autotexts = ax.pie(
+        values,
+        labels=labels,
+        colors=colors,
+        autopct=lambda pct: f"{pct:.1f}%" if pct >= 2 else "",
+        startangle=105,
+        counterclock=False,
+        wedgeprops={"linewidth": 1.0, "edgecolor": "white"},
+        textprops={"fontsize": 10},
+    )
+    for autotext in autotexts:
+        autotext.set_color("black")
+        autotext.set_fontsize(10)
+        autotext.set_weight("bold")
+    ax.set_title("Multi-Target Candidate Selection Outcome", pad=14)
+    fig.tight_layout()
+
+    output_path = output_dir / "object_centric_multi_selection_pie.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_metric_block(metric_values: dict[str, float], title: str, output_path: Path) -> Path:
+    labels = [METRIC_LABELS.get(name, name) for name in metric_values]
+    values = [metric_values[name] for name in metric_values]
+    colors = [
+        "#3A86FF",
+        "#2A9D8F",
+        "#E9C46A",
+        "#1D3557",
+        "#F4A261",
+        "#8D99AE",
+        "#577590",
+        "#43AA8B",
+        "#F8961E",
+        "#277DA1",
+    ][: len(labels)]
+
+    fig, ax = plt.subplots(figsize=(max(10.5, len(labels) * 1.1), 5.5))
+    bars = ax.bar(labels, values, color=colors)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title(title)
+    ax.tick_params(axis="x", rotation=25)
+    ax.grid(axis="y", alpha=0.25)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2.0, value + 0.015, f"{value:.3f}", ha="center", va="bottom", fontsize=9)
+    fig.tight_layout()
+
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
 def infer_metrics(metrics: dict[str, float], family_cases: dict[str, dict[str, float]]) -> list[str]:
     notes: list[str] = []
 
@@ -461,6 +783,10 @@ def infer_metrics(metrics: dict[str, float], family_cases: dict[str, dict[str, f
 def write_inference_report(
     metrics: dict[str, float],
     family_cases: dict[str, dict[str, float]],
+    object_centric_single_metrics: dict[str, float],
+    object_centric_multi_metrics: dict[str, float],
+    object_centric_binary_metrics: dict[str, float],
+    object_centric_camera_pose_metrics: dict[str, float],
     output_dir: Path,
     input_path: Path,
 ) -> tuple[Path, Path]:
@@ -480,6 +806,26 @@ def write_inference_report(
         txt_lines.append(f"- {family}:")
         for case in CASE_METRICS:
             txt_lines.append(f"  - {case}: {case_values[case]:.6f}")
+
+    txt_lines.append("")
+    txt_lines.append("Object-centric single-target diagnostics:")
+    for key, value in object_centric_single_metrics.items():
+        txt_lines.append(f"- {key}: {value:.6f}")
+
+    txt_lines.append("")
+    txt_lines.append("Object-centric multi-target diagnostics:")
+    for key, value in object_centric_multi_metrics.items():
+        txt_lines.append(f"- {key}: {value:.6f}")
+
+    txt_lines.append("")
+    txt_lines.append("Object-centric binary diagnostics:")
+    for key, value in object_centric_binary_metrics.items():
+        txt_lines.append(f"- {key}: {value:.6f}")
+
+    txt_lines.append("")
+    txt_lines.append("Object-centric camera-pose diagnostics:")
+    for key, value in object_centric_camera_pose_metrics.items():
+        txt_lines.append(f"- {key}: {value:.6f}")
 
     txt_lines.append("")
     txt_lines.append("Inferences:")
@@ -507,6 +853,26 @@ def write_inference_report(
             md_lines.append(f"- `{case}`: `{case_values[case]:.6f}`")
         md_lines.append("")
 
+    md_lines.append("## Object-Centric Single-Target Diagnostics")
+    for key, value in object_centric_single_metrics.items():
+        md_lines.append(f"- `{key}`: `{value:.6f}`")
+
+    md_lines.append("")
+    md_lines.append("## Object-Centric Multi-Target Diagnostics")
+    for key, value in object_centric_multi_metrics.items():
+        md_lines.append(f"- `{key}`: `{value:.6f}`")
+
+    md_lines.append("")
+    md_lines.append("## Object-Centric Binary Diagnostics")
+    for key, value in object_centric_binary_metrics.items():
+        md_lines.append(f"- `{key}`: `{value:.6f}`")
+
+    md_lines.append("")
+    md_lines.append("## Object-Centric Camera-Pose Diagnostics")
+    for key, value in object_centric_camera_pose_metrics.items():
+        md_lines.append(f"- `{key}`: `{value:.6f}`")
+
+    md_lines.append("")
     md_lines.append("## Inferences")
     for note in inferences:
         md_lines.append(f"- {note}")
@@ -521,6 +887,10 @@ def main() -> int:
     results = load_task_results(args.input, args.task)
     metrics = overall_metrics(results)
     family_cases = family_case_metrics(results)
+    object_centric_single_metrics = named_metrics(results, OBJECT_CENTRIC_SINGLE_METRICS)
+    object_centric_multi_metrics = named_metrics(results, OBJECT_CENTRIC_MULTI_METRICS)
+    object_centric_binary_metrics = named_metrics(results, OBJECT_CENTRIC_BINARY_METRICS)
+    object_centric_camera_pose_metrics = named_metrics(results, OBJECT_CENTRIC_CAMERA_POSE_METRICS)
     output_dir = ensure_output_dir(args.input, args.output_dir)
 
     outputs = [
@@ -532,8 +902,33 @@ def main() -> int:
         plot_family_case_grouped_bars(family_cases, output_dir),
         plot_family_summary_bars(metrics, family_cases, output_dir),
         plot_family_correctness(family_cases, output_dir),
+        plot_object_centric_single_metrics(object_centric_single_metrics, output_dir),
+        plot_object_centric_multi_metrics(object_centric_multi_metrics, output_dir),
+        plot_object_centric_sign_comparison(object_centric_single_metrics, object_centric_multi_metrics, output_dir),
+        plot_object_centric_camera_comparison(object_centric_single_metrics, object_centric_multi_metrics, output_dir),
+        plot_object_centric_multi_selection_metrics(object_centric_multi_metrics, output_dir),
+        plot_object_centric_multi_selection_pie(object_centric_multi_metrics, output_dir),
+        plot_metric_block(
+            object_centric_binary_metrics,
+            "Object-Centric Binary Diagnostics",
+            output_dir / "object_centric_binary_metrics.png",
+        ),
+        plot_metric_block(
+            object_centric_camera_pose_metrics,
+            "Object-Centric Camera-Pose Diagnostics",
+            output_dir / "object_centric_camera_pose_metrics.png",
+        ),
     ]
-    report_txt, report_md = write_inference_report(metrics, family_cases, output_dir, args.input)
+    report_txt, report_md = write_inference_report(
+        metrics,
+        family_cases,
+        object_centric_single_metrics,
+        object_centric_multi_metrics,
+        object_centric_binary_metrics,
+        object_centric_camera_pose_metrics,
+        output_dir,
+        args.input,
+    )
     outputs.extend([report_txt, report_md])
 
     print("Generated analysis artifacts:")
