@@ -102,6 +102,21 @@ OBJECT_CENTRIC_CAMERA_POSE_METRICS = [
     "object_centric_camera_pose_camera_full_sign_accuracy",
 ]
 
+GEOMETRY_METRICS = [
+    "viewpoint_reference_to_camera_cosine",
+    "viewpoint_reference_to_camera_distance_score",
+    "viewpoint_vector_cosine",
+    "viewpoint_scale_score",
+    "object_centric_relative_position_camera_direction_cosine",
+    "object_centric_relative_position_camera_distance_score",
+    "object_centric_relative_position_multi_camera_direction_cosine",
+    "object_centric_relative_position_multi_camera_distance_score",
+    "object_centric_direction_binary_camera_direction_cosine",
+    "object_centric_direction_binary_camera_distance_score",
+    "object_centric_camera_pose_camera_direction_cosine",
+    "object_centric_camera_pose_camera_distance_score",
+]
+
 METRIC_LABELS = {
     "object_centric_relative_position_camera_direction_cosine": "Camera Vector Cosine",
     "object_centric_relative_position_right_sign_accuracy": "Right Sign",
@@ -189,6 +204,7 @@ def overall_metrics(results: dict[str, Any]) -> dict[str, float]:
         "viewpoint_answer_wrong_direction_correct",
         "viewpoint_answer_and_direction_wrong",
         "viewpoint_reference_to_camera_cosine",
+        "viewpoint_reference_to_camera_distance_score",
         "viewpoint_vector_cosine",
         "viewpoint_scale_score",
         "viewpoint_combined_score",
@@ -225,6 +241,7 @@ def plot_overall_scores(metrics: dict[str, float], output_dir: Path) -> Path:
         "Direction Only",
         "Both Wrong",
         "Ref->Cam Cos",
+        "Ref->Cam Dist",
         "Vector Cos",
         "Scale",
         "Combined",
@@ -237,6 +254,7 @@ def plot_overall_scores(metrics: dict[str, float], output_dir: Path) -> Path:
         metrics["viewpoint_answer_wrong_direction_correct"],
         metrics["viewpoint_answer_and_direction_wrong"],
         metrics["viewpoint_reference_to_camera_cosine"],
+        metrics["viewpoint_reference_to_camera_distance_score"],
         metrics["viewpoint_vector_cosine"],
         metrics["viewpoint_scale_score"],
         metrics["viewpoint_combined_score"],
@@ -254,6 +272,61 @@ def plot_overall_scores(metrics: dict[str, float], output_dir: Path) -> Path:
     fig.tight_layout()
 
     output_path = output_dir / "overall_metrics.png"
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    return output_path
+
+
+def plot_geometry_metrics(geometry_metrics: dict[str, float], output_dir: Path) -> Path:
+    """Plot the continuous geometry metrics added to the result summary."""
+    labels = [
+        "Ref→Cam\nCosine",
+        "Ref→Cam\nDistance",
+        "Viewpoint\nVector Cosine",
+        "Viewpoint\nScale",
+        "Obj Single\nCam Cosine",
+        "Obj Single\nCam Distance",
+        "Obj Multi\nCam Cosine",
+        "Obj Multi\nCam Distance",
+        "Binary\nCam Cosine",
+        "Binary\nCam Distance",
+        "Camera Pose\nCam Cosine",
+        "Camera Pose\nCam Distance",
+    ]
+    values = [geometry_metrics[name] for name in GEOMETRY_METRICS]
+    colors = [
+        "#457B9D",
+        "#457B9D",
+        "#2A9D8F",
+        "#E9C46A",
+        "#3A86FF",
+        "#3A86FF",
+        "#8D99AE",
+        "#8D99AE",
+        "#F4A261",
+        "#F4A261",
+        "#1D3557",
+        "#1D3557",
+    ]
+
+    fig, ax = plt.subplots(figsize=(13, 5.8))
+    bars = ax.bar(labels, values, color=colors)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Kubric MOVi-A Viewpoint Geometry Diagnostics")
+    ax.grid(axis="y", alpha=0.25)
+    for bar, value in zip(bars, values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            value + 0.015,
+            f"{value:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+    fig.tight_layout()
+
+    output_path = output_dir / "geometry_metrics.png"
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
     return output_path
@@ -886,6 +959,7 @@ def main() -> int:
     args = parse_args()
     results = load_task_results(args.input, args.task)
     metrics = overall_metrics(results)
+    geometry_metrics = named_metrics(results, GEOMETRY_METRICS)
     family_cases = family_case_metrics(results)
     object_centric_single_metrics = named_metrics(results, OBJECT_CENTRIC_SINGLE_METRICS)
     object_centric_multi_metrics = named_metrics(results, OBJECT_CENTRIC_MULTI_METRICS)
@@ -895,6 +969,7 @@ def main() -> int:
 
     outputs = [
         plot_overall_scores(metrics, output_dir),
+        plot_geometry_metrics(geometry_metrics, output_dir),
         plot_overall_case_split(metrics, output_dir),
         plot_overall_case_pie(metrics, output_dir),
         plot_family_case_splits(family_cases, output_dir),

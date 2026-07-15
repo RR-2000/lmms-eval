@@ -8,6 +8,7 @@ standard across image-plane, camera-distance, and anchor-centric reasoning tasks
 
 import json
 import math
+import os
 import re
 from typing import Optional
 
@@ -90,12 +91,206 @@ def _get_first_float(value) -> Optional[float]:
     return None
 
 
+def _format_signed_float(value: Optional[float], digits: int = 4) -> str:
+    if value is None:
+        return "null"
+    return f"{float(value):+.{digits}f}"
+
+
+def _format_vector_text(vector: Optional[dict[str, float]]) -> str:
+    if not vector:
+        return '{"right": +0.0000, "up": +0.0000, "front": +0.0000}'
+    return (
+        '{'
+        f'"right": {_format_signed_float(vector.get("right", 0.0))}, '
+        f'"up": {_format_signed_float(vector.get("up", 0.0))}, '
+        f'"front": {_format_signed_float(vector.get("front", 0.0))}'
+        '}'
+    )
+
+
+def _exclude_gold_answer_from_hint() -> bool:
+    return os.getenv("LMMS_EVAL_VIEWPOINT_HINT_EXCLUDE_GOLD_ANSWER", "0") == "1"
+
+
+def _relation_polarity_text(relation: str) -> str:
+    axis = RELATION_TO_AXIS.get(relation)
+    if not axis:
+        return ""
+    if relation in POSITIVE_RELATIONS:
+        return f"For relation `{relation}`, the decisive `{axis}` component should be positive."
+    if relation in NEGATIVE_RELATIONS:
+        return f"For relation `{relation}`, the decisive `{axis}` component should be negative."
+    return ""
+
+
+def _build_consistency_hint(doc, gt_spec: dict) -> str:
+    relation = gt_spec.get("relation", "")
+    task_family = gt_spec.get("task_family", "")
+    answer = gt_spec.get("answer", "")
+    axis = RELATION_TO_AXIS.get(relation)
+    lines = []
+
+    if answer and not _exclude_gold_answer_from_hint():
+        lines.append(f"The gold answer is `{answer}`.")
+
+    polarity_hint = _relation_polarity_text(relation)
+    if polarity_hint:
+        lines.append(polarity_hint)
+
+    if task_family == "object_centric_relative_position_multi":
+        candidate_axis_values = _multi_object_candidate_axis_values(doc) or {}
+        if candidate_axis_values and axis:
+            ranked = sorted(
+                candidate_axis_values.items(),
+                key=lambda item: item[1],
+                reverse=relation in POSITIVE_RELATIONS,
+            )
+            ranked_text = ", ".join(
+                f"{name}({_format_signed_float(value)})" for name, value in ranked
+            )
+            lines.append(
+                f"Candidate ranking on `{axis}` from best to worst for `{relation}` is: {ranked_text}."
+            )
+            target_name = _normalize_name(gt_spec.get("target_object", ""))
+            if target_name in candidate_axis_values:
+                lines.append(
+                    f"The chosen target `{gt_spec.get('target_object', '')}` has `{axis}` = "
+                    f"{_format_signed_float(candidate_axis_values[target_name])}."
+                )
+
+    elif task_family == "object_centric_direction_binary":
+        target_name = gt_spec.get("target_object", "")
+        if axis and target_name:
+            lines.append(
+                f"To keep answer and direction consistent, the `{axis}` sign of `{target_name}` relative to "
+                f"`{gt_spec.get('reference_object', '')}` must agree with the yes/no label."
+            )
+
+    elif task_family in {
+        "camera_relative_position",
+        "height_relative_3d",
+        "camera_distance",
+        "object_centric_relative_position",
+        "object_centric_camera_pose",
+    }:
+        vector = gt_spec.get("camera_vector") if task_family == "object_centric_camera_pose" else gt_spec.get("vector")
+        if axis and vector:
+            lines.append(
+                f"The decisive `{axis}` component is {_format_signed_float(vector.get(axis, 0.0))}."
+            )
+
+    return " ".join(lines)
+
+
+def _build_viewpoint_GT_help(doc, help_mode: str) -> str:
+    assert help_mode in {"0", "1", "2", "3", "4", "5", "6", "7", "8"}, "Invalid GT help format option"
+    if help_mode == "0":
+        return ""
+
+    gt_spec = _get_gt_spec(doc)
+    relation = gt_spec.get("relation", "")
+    axis = RELATION_TO_AXIS.get(relation)
+    answer = gt_spec.get("answer", "")
+    target_object = gt_spec.get("target_object", "")
+    reference_object = gt_spec.get("reference_object", "")
+    vector = gt_spec.get("vector")
+    camera_vector = gt_spec.get("camera_vector")
+    camera_distance = gt_spec.get("camera_distance")
+    scale_ratio = gt_spec.get("scale_ratio")
+    exclude_gold_answer = _exclude_gold_answer_from_hint()
+
+    if help_mode == "1":
+        return "" if exclude_gold_answer else f"The gold answer is `{answer}`."
+
+    if help_mode == "2":
+        return _build_consistency_hint(doc, gt_spec)
+
+    if help_mode == "3":
+        parts = []
+        if answer and not exclude_gold_answer:
+            parts.append(f"The gold answer is `{answer}`.")
+        if axis:
+            parts.append(
+                f"Use the `{axis}` component to resolve relation `{relation}`; its gold value is "
+                f"{_format_signed_float((camera_vector if gt_spec.get('task_family') == 'object_centric_camera_pose' else vector).get(axis, 0.0))}."
+            )
+        return " ".join(parts)
+
+    if help_mode == "4":
+        answer_text = "" if exclude_gold_answer else f"answer=`{answer}`, "
+        return (
+            f"Gold structured target: {answer_text}target_object=`{target_object}`, "
+            f"relative_vector={_format_vector_text(vector)}."
+        )
+
+    if help_mode == "5":
+        answer_text = "" if exclude_gold_answer else f"answer=`{answer}`, "
+        lines = [
+            f"Gold structured target: {answer_text}target_object=`{target_object}`, "
+            f"reference_object=`{reference_object}`.",
+            f"relative_vector={_format_vector_text(vector)}.",
+        ]
+        if camera_vector is not None:
+            lines.append(f"camera_vector={_format_vector_text(camera_vector)}.")
+        if camera_distance is not None:
+            lines.append(f"camera_distance={float(camera_distance):.4f}.")
+        if scale_ratio is not None:
+            lines.append(f"scale_ratio={float(scale_ratio):.4f}.")
+        return " ".join(lines)
+
+    if help_mode == "6":
+        lines = [_build_consistency_hint(doc, gt_spec)]
+        if camera_vector is not None:
+            lines.append(f"Reference-to-camera vector is { _format_vector_text(camera_vector) }.")
+        if camera_distance is not None:
+            lines.append(f"Reference-to-camera distance is {float(camera_distance):.4f}.")
+        return " ".join(line for line in lines if line)
+
+    if help_mode == "7":
+        if gt_spec.get("task_family") != "object_centric_relative_position_multi":
+            return ""
+        relation_axis_values = _multi_object_candidate_axis_values(doc) or {}
+        if not relation_axis_values or not axis:
+            return ""
+        ranked = sorted(
+            relation_axis_values.items(),
+            key=lambda item: item[1],
+            reverse=relation in POSITIVE_RELATIONS,
+        )
+        return (
+            f"Candidate analysis for relation `{relation}` on axis `{axis}`: "
+            + ", ".join(f"{name}={_format_signed_float(value)}" for name, value in ranked)
+            + "."
+        )
+
+    if help_mode == "8":
+        lines = [f"relation=`{relation}`."]
+        if not exclude_gold_answer:
+            lines.insert(0, f"Gold answer=`{answer}`.")
+        if axis:
+            lines.append(f"decisive_axis=`{axis}`.")
+        lines.append(f"relative_vector={_format_vector_text(vector)}.")
+        if camera_vector is not None:
+            lines.append(f"camera_vector={_format_vector_text(camera_vector)}.")
+        if camera_distance is not None:
+            lines.append(f"camera_distance={float(camera_distance):.4f}.")
+        if scale_ratio is not None:
+            lines.append(f"scale_ratio={float(scale_ratio):.4f}.")
+        return " ".join(lines)
+
+    return ""
+
+
 def _parse_relative_vector(payload: dict) -> dict[str, float]:
     vector = {"right": 0.0, "up": 0.0, "front": 0.0}
-    if not isinstance(payload, dict):
+    if payload is None:
         return vector
 
-    raw_vector = payload.get("relative_vector", payload)
+    raw_vector = payload
+    if isinstance(payload, dict):
+        raw_vector = payload.get("relative_vector", payload)
+
     if isinstance(raw_vector, list) and len(raw_vector) >= 3:
         return {
             "right": float(raw_vector[0]),
@@ -109,7 +304,7 @@ def _parse_relative_vector(payload: dict) -> dict[str, float]:
     for axis_name, aliases in AXIS_ALIASES.items():
         for alias in aliases:
             value = _get_first_float(raw_vector.get(alias))
-            if value is None:
+            if value is None and isinstance(payload, dict):
                 value = _get_first_float(payload.get(alias))
             if value is not None:
                 vector[axis_name] = value
@@ -124,7 +319,7 @@ def _parse_named_vector(payload: dict, field_name: str) -> dict[str, float]:
     raw_vector = payload.get(field_name)
     if raw_vector is None:
         return {"right": 0.0, "up": 0.0, "front": 0.0}
-    return _parse_relative_vector({field_name: raw_vector})
+    return _parse_relative_vector(raw_vector)
 
 
 def _parse_prediction(pred_text: str) -> dict:
@@ -171,6 +366,121 @@ def _scale_ratio(reference_obj: Optional[dict], target_obj: Optional[dict]) -> O
     return math.sqrt(target_area / reference_area)
 
 
+def _get_frame_index(doc) -> Optional[int]:
+    metadata = doc.get("task_metadata", {}) or {}
+    for key in ("frame_index", "frame_idx", "frame_number"):
+        value = metadata.get(key, doc.get(key))
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+
+    image_path = _get_image_path(doc)
+    match = re.search(r"frame_(\d+)", image_path)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _select_frame_value(value, frame_index: Optional[int]):
+    if not isinstance(value, list) or not value:
+        return value
+    if all(not isinstance(item, list) for item in value):
+        return value
+    if frame_index is not None and 0 <= frame_index < len(value):
+        return value[frame_index]
+    return value[0]
+
+
+def _get_camera_position(doc) -> Optional[list[float]]:
+    metadata = doc.get("task_metadata", {}) or {}
+    camera_metadata = doc.get("camera_metadata", {}) or {}
+    camera_doc = doc.get("camera", {}) or {}
+    frame_index = _get_frame_index(doc)
+
+    candidates = [
+        metadata.get("camera_position"),
+        doc.get("camera_position"),
+        camera_metadata.get("position"),
+        camera_doc.get("position"),
+        camera_doc.get("positions"),
+    ]
+    for candidate in candidates:
+        selected = _select_frame_value(candidate, frame_index)
+        if isinstance(selected, list) and len(selected) == 3:
+            return [float(selected[i]) for i in range(3)]
+    return None
+
+
+def _get_camera_quaternion(doc) -> Optional[list[float]]:
+    metadata = doc.get("task_metadata", {}) or {}
+    camera_metadata = doc.get("camera_metadata", {}) or {}
+    camera_doc = doc.get("camera", {}) or {}
+    frame_index = _get_frame_index(doc)
+
+    candidates = [
+        metadata.get("camera_quaternion"),
+        metadata.get("camera_rotation"),
+        doc.get("camera_quaternion"),
+        doc.get("camera_rotation"),
+        camera_metadata.get("quaternion"),
+        camera_metadata.get("rotation"),
+        camera_doc.get("quaternion"),
+        camera_doc.get("quaternions"),
+        camera_doc.get("rotation"),
+    ]
+    for candidate in candidates:
+        selected = _select_frame_value(candidate, frame_index)
+        if isinstance(selected, list) and len(selected) == 4:
+            return [float(selected[i]) for i in range(4)]
+    return None
+
+
+def _quaternion_to_camera_basis(quaternion: list[float]) -> Optional[dict[str, list[float]]]:
+    if not quaternion or len(quaternion) != 4:
+        return None
+
+    w, x, y, z = (float(quaternion[i]) for i in range(4))
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+
+    rotation = [
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+    ]
+
+    right = [rotation[row][0] for row in range(3)]
+    up = [rotation[row][1] for row in range(3)]
+    front = [-rotation[row][2] for row in range(3)]
+    return {"right": right, "up": up, "front": front}
+
+
+def _camera_frame_vector_from_world(doc, world_vector: list[float]) -> dict[str, float]:
+    basis = _quaternion_to_camera_basis(_get_camera_quaternion(doc) or [])
+    if not basis:
+        return {
+            "right": float(world_vector[0]),
+            "up": float(world_vector[2]),
+            "front": float(world_vector[1]),
+        }
+
+    return {
+        "right": _vector_dot(world_vector, basis["right"]),
+        "up": _vector_dot(world_vector, basis["up"]),
+        "front": _vector_dot(world_vector, basis["front"]),
+    }
+
+
+def _camera_frame_position(doc, position: list[float]) -> Optional[dict[str, float]]:
+    camera_position = _get_camera_position(doc)
+    if not position or len(position) != 3 or not camera_position or len(camera_position) != 3:
+        return None
+    translated = _vector_sub(position, camera_position)
+    return _camera_frame_vector_from_world(doc, translated)
+
+
 def _camera_distance(obj: dict, camera_position: list[float]) -> Optional[float]:
     position = obj.get("position_3d")
     if not position or len(position) != 3 or not camera_position or len(camera_position) != 3:
@@ -180,33 +490,23 @@ def _camera_distance(obj: dict, camera_position: list[float]) -> Optional[float]
 
 def _camera_world_vector_from_anchor(doc, anchor_name: str) -> tuple[Optional[dict[str, float]], Optional[float]]:
     anchor_obj = _get_object_record(doc, anchor_name)
-    metadata = doc.get("task_metadata", {}) or {}
-    camera_position = (
-        metadata.get("camera_position")
-        or doc.get("camera_position")
-        or (doc.get("camera_metadata", {}) or {}).get("position")
-    )
-    if not anchor_obj or not camera_position or len(camera_position) != 3:
+    if not anchor_obj:
         return None, None
 
     anchor_position = anchor_obj.get("position_3d")
-    if not anchor_position or len(anchor_position) != 3:
+    anchor_in_camera_frame = _camera_frame_position(doc, anchor_position) if anchor_position else None
+    if not anchor_in_camera_frame:
         return None, None
 
-    delta_x = float(camera_position[0]) - float(anchor_position[0])
-    delta_y = float(camera_position[1]) - float(anchor_position[1])
-    delta_z = float(camera_position[2]) - float(anchor_position[2])
-    distance = math.sqrt(delta_x**2 + delta_y**2 + delta_z**2)
+    vector = {
+        "right": -float(anchor_in_camera_frame["right"]),
+        "up": -float(anchor_in_camera_frame["up"]),
+        "front": -float(anchor_in_camera_frame["front"]),
+    }
+    distance = math.sqrt(sum(float(vector[axis]) ** 2 for axis in ("right", "up", "front")))
     if distance <= 1e-8:
         return None, None
 
-    # World-aligned camera frame:
-    # right = +X, up = +Z, front = +Y
-    vector = {
-        "right": delta_x,
-        "up": delta_z,
-        "front": delta_y,
-    }
     return vector, distance
 
 
@@ -272,33 +572,47 @@ def _gt_pair(doc) -> tuple[Optional[dict], Optional[dict], list[str]]:
 def _compute_anchor_local_vector(doc, anchor_name: str, target_name: str) -> Optional[dict[str, float]]:
     anchor_obj = _get_object_record(doc, anchor_name)
     target_obj = _get_object_record(doc, target_name)
-    metadata = doc.get("task_metadata", {}) or {}
-    camera_position = metadata.get("camera_position")
-
-    if not anchor_obj or not target_obj or not camera_position:
+    if not anchor_obj or not target_obj:
         return None
     anchor_position = anchor_obj.get("position_3d")
     target_position = target_obj.get("position_3d")
-    if not anchor_position or not target_position or len(anchor_position) != 3 or len(target_position) != 3 or len(camera_position) != 3:
+    if not anchor_position or not target_position or len(anchor_position) != 3 or len(target_position) != 3:
         return None
 
     relative = _vector_sub(target_position, anchor_position)
-    world_up = [0.0, 0.0, 1.0]
-    forward_world = _vector_sub(camera_position, anchor_position)
-    forward_horizontal = [forward_world[0], forward_world[1], 0.0]
-    forward = _vector_normalize(forward_horizontal)
-    if forward is None:
-        return None
-    # cross(forward, up) matches the natural-language right sign convention
-    right = _vector_normalize(_vector_cross(forward, world_up))
-    if right is None:
-        return None
+    return _camera_frame_vector_from_world(doc, relative)
 
-    return {
-        "right": _vector_dot(relative, right),
-        "up": relative[2],
-        "front": _vector_dot(relative, forward),
-    }
+
+def _pair_answer_from_relation(relation: str, reference_name: str, target_name: str, axis_value: float, fallback: str) -> str:
+    axis_sign = _sign(axis_value)
+    if axis_sign == 0:
+        return fallback
+    if relation in POSITIVE_RELATIONS:
+        return target_name if axis_sign > 0 else reference_name
+    if relation in NEGATIVE_RELATIONS:
+        return target_name if axis_sign < 0 else reference_name
+    return fallback
+
+
+def _binary_answer_from_relation(relation: str, axis_value: float, fallback: str) -> str:
+    axis_sign = _sign(axis_value)
+    if axis_sign == 0:
+        return fallback
+    if relation in POSITIVE_RELATIONS:
+        return "yes" if axis_sign > 0 else "no"
+    if relation in NEGATIVE_RELATIONS:
+        return "yes" if axis_sign < 0 else "no"
+    return fallback
+
+
+def _dominant_horizontal_relation(vector: dict[str, float], fallback: str) -> str:
+    right = float(vector.get("right", 0.0))
+    front = float(vector.get("front", 0.0))
+    if abs(right) >= abs(front) and abs(right) > 1e-8:
+        return "right" if right > 0 else "left"
+    if abs(front) > 1e-8:
+        return "front" if front > 0 else "behind"
+    return fallback
 
 
 def _relation_axis_sign(relation: str, axis_value: float) -> int:
@@ -471,40 +785,62 @@ def _get_gt_spec(doc) -> dict:
             spec["reference_object"] = names[0]
             spec["target_object"] = names[1]
         spec["scale_ratio"] = _scale_ratio(reference_obj, target_obj)
+        reference_name = spec["reference_object"]
+        target_name = spec["target_object"]
+        reference_position = reference_obj.get("position_3d") if reference_obj else None
+        target_position = target_obj.get("position_3d") if target_obj else None
 
         if task_family == "camera_relative_position":
-            delta = metadata.get("center_delta")
-            if isinstance(delta, list) and len(delta) == 2:
-                spec["vector"] = {"right": float(delta[0]), "up": -float(delta[1]), "front": 0.0}
-            elif reference_obj and target_obj:
-                a = reference_obj.get("image_position_2d", reference_obj.get("bbox_center_norm"))
-                b = target_obj.get("image_position_2d", target_obj.get("bbox_center_norm"))
-                if a and b and len(a) == 2 and len(b) == 2:
-                    spec["vector"] = {"right": float(b[0]) - float(a[0]), "up": float(a[1]) - float(b[1]), "front": 0.0}
+            if reference_position and target_position:
+                spec["vector"] = _camera_frame_vector_from_world(
+                    doc,
+                    _vector_sub(target_position, reference_position),
+                )
+            axis = RELATION_TO_AXIS.get(relation)
+            if axis:
+                spec["answer"] = _pair_answer_from_relation(
+                    relation,
+                    reference_name,
+                    target_name,
+                    float(spec["vector"].get(axis, 0.0)),
+                    gt_answer,
+                )
 
         elif task_family == "height_relative_3d":
-            if "object_a_z" in metadata and "object_b_z" in metadata:
-                dz = float(metadata["object_b_z"]) - float(metadata["object_a_z"])
-            elif reference_obj and target_obj:
-                dz = float(target_obj["position_3d"][2]) - float(reference_obj["position_3d"][2])
-            else:
-                dz = 0.0
-            spec["vector"] = {"right": 0.0, "up": dz, "front": 0.0}
+            if reference_position and target_position:
+                spec["vector"] = _camera_frame_vector_from_world(
+                    doc,
+                    _vector_sub(target_position, reference_position),
+                )
+            axis = RELATION_TO_AXIS.get(relation)
+            if axis:
+                spec["answer"] = _pair_answer_from_relation(
+                    relation,
+                    reference_name,
+                    target_name,
+                    float(spec["vector"].get(axis, 0.0)),
+                    gt_answer,
+                )
 
         elif task_family == "camera_distance":
-            distance_a = metadata.get("object_a_camera_distance")
-            distance_b = metadata.get("object_b_camera_distance")
-            if distance_a is not None and distance_b is not None:
-                delta = float(distance_a) - float(distance_b)
+            reference_camera_position = _camera_frame_position(doc, reference_position) if reference_position else None
+            target_camera_position = _camera_frame_position(doc, target_position) if target_position else None
+            if reference_camera_position and target_camera_position:
+                depth_delta = float(reference_camera_position["front"]) - float(target_camera_position["front"])
+                spec["vector"] = {"right": 0.0, "up": 0.0, "front": depth_delta}
             else:
-                camera_position = metadata.get("camera_position")
+                camera_position = _get_camera_position(doc) or metadata.get("camera_position")
                 if reference_obj and target_obj and camera_position:
                     dist_a = _camera_distance(reference_obj, camera_position)
                     dist_b = _camera_distance(target_obj, camera_position)
-                    delta = float(dist_a or 0.0) - float(dist_b or 0.0)
-                else:
-                    delta = 0.0
-            spec["vector"] = {"right": 0.0, "up": 0.0, "front": delta}
+                    spec["vector"] = {"right": 0.0, "up": 0.0, "front": float(dist_a or 0.0) - float(dist_b or 0.0)}
+            spec["answer"] = _pair_answer_from_relation(
+                relation,
+                reference_name,
+                target_name,
+                float(spec["vector"].get("front", 0.0)),
+                gt_answer,
+            )
 
     elif task_family == "object_centric_relative_position":
         anchor_name = metadata.get("anchor_object", "")
@@ -513,28 +849,39 @@ def _get_gt_spec(doc) -> dict:
         spec["target_object"] = target_name
         spec["scale_ratio"] = _scale_ratio(_get_object_record(doc, anchor_name), _get_object_record(doc, target_name))
         spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
-        rel = metadata.get("relative_local_coordinates", {}) or {}
-        spec["vector"] = {
-            "right": -float(rel.get("right", 0.0)),
-            "up": float(rel.get("up", 0.0)),
-            "front": float(rel.get("front", 0.0)),
-        }
+        local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+        if local_vector:
+            spec["vector"] = local_vector
+            spec["answer"] = _dominant_horizontal_relation(local_vector, gt_answer)
+            spec["relation"] = spec["answer"]
 
     elif task_family == "object_centric_relative_position_multi":
         anchor_name = metadata.get("anchor_object", "")
         target_name = metadata.get("correct_object", gt_answer)
         spec["reference_object"] = anchor_name
+        axis_values = _multi_object_candidate_axis_values(doc) or {}
+        candidates = metadata.get("candidate_objects", []) or _get_queried_object_names(doc)[1:]
+        axis = RELATION_TO_AXIS.get(relation)
+        normalized_candidates = { _normalize_name(name): name for name in candidates }
+        if axis_values and axis:
+            if relation in POSITIVE_RELATIONS:
+                chosen_target = max(axis_values.items(), key=lambda item: item[1])[0]
+            else:
+                chosen_target = min(axis_values.items(), key=lambda item: item[1])[0]
+            target_name = normalized_candidates.get(chosen_target, target_name)
         spec["target_object"] = target_name
+        spec["answer"] = target_name
         spec["scale_ratio"] = _scale_ratio(_get_object_record(doc, anchor_name), _get_object_record(doc, target_name))
         spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
-        rel = metadata.get("correct_relative_local_coordinates", {}) or {}
-        spec["vector"] = {
-            "right": -float(rel.get("right", 0.0)),
-            "up": float(rel.get("up", 0.0)),
-            "front": float(rel.get("front", 0.0)),
-        }
+        local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+        if local_vector:
+            spec["vector"] = local_vector
 
     elif task_family == "object_centric_direction_binary":
+        relation = str(
+            metadata.get("queried_relation", metadata.get("relation", ""))
+        ).strip().lower()
+        spec["relation"] = relation
         anchor_name = metadata.get("anchor_object", "")
         target_name = metadata.get("target_object", "")
         spec["reference_object"] = anchor_name
@@ -544,28 +891,26 @@ def _get_gt_spec(doc) -> dict:
             _get_object_record(doc, target_name),
         )
         spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
-        rel = metadata.get("relative_local_coordinates", {}) or {}
-        spec["vector"] = {
-            "right": -float(rel.get("right", 0.0)),
-            "up": float(rel.get("up", 0.0)),
-            "front": float(rel.get("front", 0.0)),
-        }
+        local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+        if local_vector:
+            spec["vector"] = local_vector
+        axis = RELATION_TO_AXIS.get(relation)
+        if axis:
+            spec["answer"] = _binary_answer_from_relation(
+                relation,
+                float(spec["vector"].get(axis, 0.0)),
+                gt_answer,
+            )
 
     elif task_family == "object_centric_camera_pose":
         anchor_name = metadata.get("anchor_object", "")
         spec["reference_object"] = anchor_name
         spec["target_object"] = ""
-        camera_vector = metadata.get("camera_vector_world_aligned")
-        if isinstance(camera_vector, dict):
-            spec["camera_vector"] = {
-                "right": float(camera_vector.get("right", 0.0)),
-                "up": float(camera_vector.get("up", 0.0)),
-                "front": float(camera_vector.get("front", 0.0)),
-            }
-        else:
-            spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
+        spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
         if spec["camera_vector"] is not None:
             spec["vector"] = dict(spec["camera_vector"])
+            spec["answer"] = _dominant_horizontal_relation(spec["camera_vector"], gt_answer)
+            spec["relation"] = spec["answer"]
         if spec["camera_distance"] is None and metadata.get("camera_distance") is not None:
             spec["camera_distance"] = float(metadata["camera_distance"])
 
@@ -582,10 +927,13 @@ def _build_task_instructions(doc) -> str:
 
     lines = [
         "Return only valid JSON.",
-        "Use this canonical sign standard:",
-        "- `right` > 0 means the target object is to the right of the reference object.",
-        "- `up` > 0 means the target object is higher than the reference object.",
-        "- `front` > 0 means the target object is more in front; for camera-distance questions, use `front` > 0 when the target object is closer to the camera.",
+        "Use this canonical camera-frame convention for every 3D coordinate you return:",
+        "- First translate coordinates so the camera center is at the origin.",
+        "- Then rotate into the camera frame using the camera rotation.",
+        "- In this camera frame, `right` is +X, `front` is +Y, and `up` is +Z.",
+        "- `right` > 0 means the target is to the camera-right of the reference.",
+        "- `up` > 0 means the target is above the reference in the camera frame.",
+        "- `front` > 0 means the target is farther forward along the viewing direction; for camera-distance questions, use `front` > 0 when the target object is closer to the camera.",
         "- `scale_ratio` means apparent target size divided by apparent reference size.",
     ]
 
@@ -595,10 +943,10 @@ def _build_task_instructions(doc) -> str:
                 f"Reference object: {reference_object}",
                 f"Target object: {target_object}",
                 f"Question relation to resolve: {relation}",
-                f"Answer with which object satisfies the question: `{answer}` is the gold label format.",
+                f"Answer with which object satisfies the question: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<object name>","target_object":"'
                 + target_object
-                + '","relative_vector":{"right":<float>,"up":<float>,"front":0.0},"scale_ratio":<float>}',
+                + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
             ]
         )
     elif task_family == "height_relative_3d":
@@ -607,10 +955,10 @@ def _build_task_instructions(doc) -> str:
                 f"Reference object: {reference_object}",
                 f"Target object: {target_object}",
                 f"Question relation to resolve: {relation}",
-                f"Answer with which object satisfies the question: `{answer}` is the gold label format.",
+                f"Answer with which object satisfies the question: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<object name>","target_object":"'
                 + target_object
-                + '","relative_vector":{"right":0.0,"up":<float>,"front":0.0},"scale_ratio":<float>}',
+                + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
             ]
         )
     elif task_family == "camera_distance":
@@ -619,7 +967,7 @@ def _build_task_instructions(doc) -> str:
                 f"Reference object: {reference_object}",
                 f"Target object: {target_object}",
                 f"Question relation to resolve: {relation}",
-                f"Answer with which object satisfies the question: `{answer}` is the gold label format.",
+                f"Answer with which object satisfies the question: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<object name>","target_object":"'
                 + target_object
                 + '","relative_vector":{"right":0.0,"up":0.0,"front":<float>},"scale_ratio":<float>}',
@@ -630,11 +978,10 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 f"Target object: {target_object}",
-                "Interpret the frame as standing at the anchor object and facing the camera.",
-                "Also provide `camera_vector`, the true direction from the reference anchor object to the camera in a world-aligned frame.",
-                "- For `camera_vector`, use `right` > 0 for larger world X, `up` > 0 for larger world Z, and `front` > 0 for larger world Y.",
+                "Express the target-minus-anchor displacement in the camera frame described above.",
+                "Also provide `camera_vector`, the direction from the anchor object to the camera after the same camera-origin, camera-rotation transform.",
                 "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
-                f"Answer with the discrete relation word: `{answer}` is the gold label format.",
+                f"Answer with the discrete relation word: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<left|right|front|behind>","target_object":"'
                 + target_object
                 + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>,"scale_ratio":<float>}',
@@ -647,11 +994,10 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 f"Candidate target objects: {candidate_text}",
-                "Interpret the frame as standing at the anchor object and facing the camera.",
-                "Also provide `camera_vector`, the true direction from the reference anchor object to the camera in a world-aligned frame.",
-                "- For `camera_vector`, use `right` > 0 for larger world X, `up` > 0 for larger world Z, and `front` > 0 for larger world Y.",
+                "Express each candidate target relative to the anchor in the camera frame described above.",
+                "Also provide `camera_vector`, the direction from the anchor object to the camera after the same camera-origin, camera-rotation transform.",
                 "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
-                f"Answer with the chosen target object name: `{answer}` is the gold label format.",
+                f"Answer with the chosen target object name: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<object name>","target_object":"<object name>","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>,"scale_ratio":<float>}',
             ]
         )
@@ -661,11 +1007,10 @@ def _build_task_instructions(doc) -> str:
                 f"Reference anchor object: {reference_object}",
                 f"Target object: {target_object}",
                 f"Queried relation to verify: {relation}",
-                "Interpret the frame as standing at the anchor object and facing the camera.",
-                "Also provide `camera_vector`, the true direction from the reference anchor object to the camera in a world-aligned frame.",
-                "- For `camera_vector`, use `right` > 0 for larger world X, `up` > 0 for larger world Z, and `front` > 0 for larger world Y.",
+                "Express the target-minus-anchor displacement in the camera frame described above.",
+                "Also provide `camera_vector`, the direction from the anchor object to the camera after the same camera-origin, camera-rotation transform.",
                 "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
-                f"Answer with `yes` or `no`: `{answer}` is the gold label format.",
+                f"Answer with `yes` or `no`: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<yes|no>","target_object":"'
                 + target_object
                 + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>,"scale_ratio":<float>}',
@@ -675,10 +1020,10 @@ def _build_task_instructions(doc) -> str:
         lines.extend(
             [
                 f"Reference anchor object: {reference_object}",
-                "Estimate the camera position relative to the anchor object using a world-aligned frame.",
-                "- For `camera_vector`, use `right` > 0 for larger world X, `up` > 0 for larger world Z, and `front` > 0 for larger world Y.",
+                "Estimate the camera position relative to the anchor object in the canonical camera frame described above.",
+                "Because the camera is the origin, `camera_vector` should point from the anchor object back to the camera in that same frame.",
                 "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
-                f"Answer with the dominant horizontal relation word: `{answer}` is the gold label format.",
+                f"Answer with the dominant horizontal relation word: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<left|right|front|behind>","camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>}',
             ]
         )
@@ -689,7 +1034,15 @@ def _build_task_instructions(doc) -> str:
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     question = str(doc.get("question", "")).strip()
     instructions = _build_task_instructions(doc)
-    return f"Question: {question}\n{instructions}\n"
+    gt_help = ""
+    help_mode = os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0")
+    if help_mode in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+        gt_help = _build_viewpoint_GT_help(doc, help_mode)
+
+    prompt = f"Question: {question}\n{instructions}\n"
+    if gt_help:
+        prompt += f"{gt_help}\n"
+    return prompt
 
 
 def doc_to_target(doc):
@@ -1109,6 +1462,7 @@ def process_results(doc, results):
             "vector_cosine": scores["vector_cosine"],
             "scale_score": scores["scale_score"],
             "combined_score": scores["combined_score"],
+            "Help_Prompt": _build_viewpoint_GT_help(doc, os.getenv("LMMS_EVAL_INCLUDE_GT_HELP_TEXT", "0")),
         },
     }
 
