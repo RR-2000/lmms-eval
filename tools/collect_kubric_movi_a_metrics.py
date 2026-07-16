@@ -91,7 +91,8 @@ def load_rows(path: Path, all_metrics: bool, precision: int) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     results = payload.get("results", {})
     model = payload.get("model_name") or payload.get("model_source", "")
-    run = payload.get("date") or path.stem.removesuffix("_results")
+    # run = payload.get("date") or path.stem.removesuffix("_results")
+    run = payload.get("config").get("resolved_cli_args").get("output_path").split("/")[-1]
 
     rows: list[dict[str, Any]] = []
     discovered: set[str] = set()

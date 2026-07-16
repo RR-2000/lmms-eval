@@ -212,7 +212,7 @@ def _build_viewpoint_GT_help(doc, help_mode: str) -> str:
             parts.append(f"The gold answer is `{answer}`.")
         if axis:
             parts.append(
-                f"Use the `{axis}` component to resolve relation `{relation}`; its gold value is "
+                f"Use the `{axis}` component to resolve relation `{relation}`"
                 f"{_format_signed_float((camera_vector if gt_spec.get('task_family') == 'object_centric_camera_pose' else vector).get(axis, 0.0))}."
             )
         return " ".join(parts)
@@ -278,6 +278,21 @@ def _build_viewpoint_GT_help(doc, help_mode: str) -> str:
         if scale_ratio is not None:
             lines.append(f"scale_ratio={float(scale_ratio):.4f}.")
         return " ".join(lines)
+
+    # if help_mode == "9":
+    #     lines = []
+    #     if not exclude_gold_answer:
+    #         lines.append(f"Gold answer=`{answer}`.")
+    #     if axis:
+    #         lines.append(f"decisive_axis=`{axis}`.")
+    #     lines.append(f"relative_vector={_format_vector_text(vector)}.")
+    #     if camera_vector is not None:
+    #         lines.append(f"camera_vector={_format_vector_text(camera_vector)}.")
+    #     if camera_distance is not None:
+    #         lines.append(f"camera_distance={float(camera_distance):.4f}.")
+    #     if scale_ratio is not None:
+    #         lines.append(f"scale_ratio={float(scale_ratio):.4f}.")
+    #     return " ".join(lines)
 
     return ""
 
