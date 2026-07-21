@@ -1,0 +1,249 @@
+dataset_name: null
+test_split: test
+task: "kubric_movi_a_viewpoint_clean"
+include: _default_template_yaml
+
+metric_list:
+  - metric: viewpoint_answer_accuracy
+    aggregation: !function utils.aggregate_viewpoint_answer_accuracy
+    higher_is_better: true
+  - metric: viewpoint_axis_sign_accuracy
+    aggregation: !function utils.aggregate_viewpoint_axis_sign_accuracy
+    higher_is_better: true
+  - metric: viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: viewpoint_reference_to_camera_cosine
+    aggregation: !function utils.aggregate_viewpoint_reference_to_camera_cosine
+    higher_is_better: true
+  - metric: viewpoint_reference_to_camera_distance_score
+    aggregation: !function utils.aggregate_viewpoint_reference_to_camera_distance_score
+    higher_is_better: true
+  - metric: camera_relative_position_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_camera_relative_position_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: camera_relative_position_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_camera_relative_position_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: camera_relative_position_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_camera_relative_position_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: camera_relative_position_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_camera_relative_position_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: camera_distance_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_camera_distance_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: camera_distance_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_camera_distance_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: camera_distance_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_camera_distance_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: camera_distance_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_camera_distance_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: height_relative_3d_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_height_relative_3d_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: height_relative_3d_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_height_relative_3d_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: height_relative_3d_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_height_relative_3d_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: height_relative_3d_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_height_relative_3d_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_direction_cosine
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_direction_cosine
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_distance_score
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_distance_score
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_up_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_up_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_full_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_full_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_camera_vector_nonzero
+    aggregation: !function utils.aggregate_object_centric_relative_position_camera_vector_nonzero
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_direction_cosine
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_direction_cosine
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_distance_score
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_distance_score
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_up_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_up_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_full_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_full_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_camera_vector_nonzero
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_camera_vector_nonzero
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_candidate_aware_direction_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_candidate_aware_direction_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_direction_given_predicted_object_accuracy
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_direction_given_predicted_object_accuracy
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_ranking_accuracy_on_relation_axis
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_ranking_accuracy_on_relation_axis
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_ranking_score_on_relation_axis
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_ranking_score_on_relation_axis
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_predicted_target_in_candidate_set
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_predicted_target_in_candidate_set
+    higher_is_better: true
+  - metric: object_centric_direction_binary_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_object_centric_direction_binary_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: object_centric_direction_binary_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_direction_binary_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_direction_binary_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_object_centric_direction_binary_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: object_centric_direction_binary_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_direction_binary_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_direction_cosine
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_direction_cosine
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_distance_score
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_distance_score
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_up_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_up_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_full_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_direction_binary_full_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_direction_binary_camera_vector_nonzero
+    aggregation: !function utils.aggregate_object_centric_direction_binary_camera_vector_nonzero
+    higher_is_better: true
+  - metric: object_centric_camera_pose_viewpoint_answer_and_direction_correct
+    aggregation: !function utils.aggregate_object_centric_camera_pose_viewpoint_answer_and_direction_correct
+    higher_is_better: true
+  - metric: object_centric_camera_pose_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_camera_pose_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_camera_pose_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_object_centric_camera_pose_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: object_centric_camera_pose_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_camera_pose_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_camera_pose_camera_direction_cosine
+    aggregation: !function utils.aggregate_object_centric_camera_pose_camera_direction_cosine
+    higher_is_better: true
+  - metric: object_centric_camera_pose_camera_distance_score
+    aggregation: !function utils.aggregate_object_centric_camera_pose_camera_distance_score
+    higher_is_better: true
+  - metric: object_centric_camera_pose_camera_right_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_camera_pose_camera_right_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_camera_pose_camera_up_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_camera_pose_camera_up_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_camera_pose_camera_front_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_camera_pose_camera_front_sign_accuracy
+    higher_is_better: true
+  - metric: object_centric_camera_pose_camera_full_sign_accuracy
+    aggregation: !function utils.aggregate_object_centric_camera_pose_camera_full_sign_accuracy
+    higher_is_better: true
+  - metric: viewpoint_vector_cosine
+    aggregation: !function utils.aggregate_viewpoint_vector_cosine
+    higher_is_better: true
+  - metric: viewpoint_scale_score
+    aggregation: !function utils.aggregate_viewpoint_scale_score
+    higher_is_better: true
+  - metric: viewpoint_combined_score
+    aggregation: !function utils.aggregate_viewpoint_combined_score
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false

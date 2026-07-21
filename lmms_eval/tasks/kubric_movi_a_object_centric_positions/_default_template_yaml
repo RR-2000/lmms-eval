@@ -1,0 +1,24 @@
+dataset_path: parquet
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/movi_a_3dsr/movi_a_validation.parquet
+
+generation_kwargs:
+  max_new_tokens: 256
+  temperature: 0.0
+  top_p: 1.0
+  do_sample: false
+
+output_type: generate_until
+process_docs: !function utils.process_object_centric_position_docs
+doc_to_visual: !function utils.doc_to_visual
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_results
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+
+metadata:
+  - version: 0.0

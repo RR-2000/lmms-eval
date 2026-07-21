@@ -10,8 +10,11 @@ asking for camera-to-object vectors and once for object-to-camera vectors.
 """
 
 import json
+import os
 import random
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from datasets import Dataset
@@ -19,7 +22,7 @@ from loguru import logger as eval_logger
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks.kubric_movi_a.utils import _get_image_path, _get_object_record, _get_options, doc_to_visual
-from lmms_eval.tasks.kubric_movi_a_viewpoint.utils import _camera_frame_position, _camera_frame_vector_from_world, _cosine_similarity, _sign, _vector_sub
+from lmms_eval.tasks.kubric_movi_a_viewpoint.utils import _camera_frame_position, _camera_frame_vector_from_world, _cosine_similarity, _get_camera_quaternion, _sign, _vector_sub
 from lmms_eval.utils import sanitize_model_name
 
 
@@ -28,6 +31,7 @@ DIRECTIONS = ("left", "right", "front", "behind")
 VECTOR_VARIANTS = ("camera_to_object", "object_to_camera")
 SAMPLE_SEED = "kubric_movi_a_direction_vector_v1"
 AXES = ("right", "up", "front")
+BALANCE_FAMILIES_ENV = "LMMS_EVAL_DIRECTION_VECTOR_BALANCE_FAMILIES"
 
 
 def _answer_text(doc: dict) -> str:
@@ -59,15 +63,28 @@ def _multiple_object_options(doc: dict, anchor: str, target: str, source_qid: st
     return candidates
 
 
+def _balance_families() -> bool:
+    """Whether to sample the same number of source documents per task family."""
+    return os.getenv(BALANCE_FAMILIES_ENV, "0").strip().lower() not in {"0", "false", "no"}
+
+
 def process_docs(dataset: Dataset) -> Dataset:
-    """Balance the two source families and make text-format × vector-direction pairs."""
+    """Optionally balance source families, then make text-format × vector-direction pairs."""
     by_family = {family: [] for family in SOURCE_FAMILIES}
     for doc in dataset:
         if doc.get("task_family") in by_family:
             by_family[doc["task_family"]].append(doc)
-    count = min((len(rows) for rows in by_family.values()), default=0)
+
+    balance_families = _balance_families()
+    balanced_count = min((len(rows) for rows in by_family.values()), default=0)
     sampler = random.Random(SAMPLE_SEED)
-    sources = [doc for family in sorted(by_family) for doc in sampler.sample(by_family[family], count)]
+    selected_by_family = {
+        family: sampler.sample(rows, balanced_count) if balance_families else list(rows)
+        for family, rows in sorted(by_family.items())
+    }
+    sources = [doc for family in sorted(selected_by_family) for doc in selected_by_family[family]]
+    source_counts = {family: len(rows) for family, rows in by_family.items()}
+    selected_counts = {family: len(rows) for family, rows in selected_by_family.items()}
     records, skipped = [], 0
 
     for doc in sources:
@@ -80,7 +97,7 @@ def process_docs(dataset: Dataset) -> Dataset:
             continue
         source_qid = str(doc.get("qid", doc.get("index", "unknown")))
         common = dict(doc)
-        common.update({"source_qid": source_qid, "source_task_family": doc["task_family"], "diagnostic_anchor": anchor, "diagnostic_target": target, "diagnostic_relation": relation})
+        common.update({"source_qid": source_qid, "source_task_family": doc["task_family"], "diagnostic_anchor": anchor, "diagnostic_target": target, "diagnostic_relation": relation, "diagnostic_balance_families": balance_families, "diagnostic_available_source_counts": source_counts, "diagnostic_selected_source_counts": selected_counts})
         text_variants = []
         native = dict(common)
         native.update({"diagnostic_text_variant": "native", "diagnostic_answer_format": "direction" if doc["task_family"] == "object_centric_relative_position" else "object", "diagnostic_text_target": relation if doc["task_family"] == "object_centric_relative_position" else target})
@@ -101,13 +118,65 @@ def process_docs(dataset: Dataset) -> Dataset:
                 variant = dict(text_doc)
                 variant.update({"qid": f"{source_qid}::{text_doc['diagnostic_text_variant']}::{vector_variant}", "index": f"{source_qid}::{text_doc['diagnostic_text_variant']}::{vector_variant}", "diagnostic_vector_variant": vector_variant})
                 records.append(variant)
-    eval_logger.info("Kubric direction/vector task sampled %d items per family (%d records).", count, len(records))
+    eval_logger.info(
+        "Kubric direction/vector sampling (balance={}, seed={}): available={}; selected={}; records={}.",
+        balance_families,
+        SAMPLE_SEED,
+        source_counts,
+        selected_counts,
+        len(records),
+    )
     if skipped:
         eval_logger.warning("Skipped %d source items without usable 3D object records.", skipped)
     return Dataset.from_list(records)
 
 
+@lru_cache(maxsize=None)
+def _export_camera_pose(image_path: str, frame_index: int) -> tuple[Optional[list[float]], Optional[list[float]]]:
+    """Recover the per-frame pose omitted from the compact parquet export.
+
+    The source metadata stores camera quaternions as (w, x, y, z), matching
+    the viewpoint utility's convention. Without this pose, that utility falls
+    back to a world-axis permutation, which is not camera-aligned for MOVi-A.
+    """
+    if not image_path:
+        return None, None
+    metadata_path = Path(image_path).parent.parent / "metadata.json"
+    try:
+        with metadata_path.open(encoding="utf-8") as handle:
+            camera = json.load(handle).get("camera", {})
+        positions = camera.get("positions", [])
+        quaternions = camera.get("quaternions", [])
+        if not (0 <= frame_index < len(positions) and 0 <= frame_index < len(quaternions)):
+            return None, None
+        position, quaternion = positions[frame_index], quaternions[frame_index]
+        if len(position) != 3 or len(quaternion) != 4:
+            return None, None
+        return [float(value) for value in position], [float(value) for value in quaternion]
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None, None
+
+
+def _camera_pose_doc(doc: dict) -> dict:
+    """Return a document guaranteed to carry the camera pose when available."""
+    if _get_camera_quaternion(doc):
+        return doc
+    frame_index = doc.get("frame_index", (doc.get("task_metadata") or {}).get("frame_index", 0))
+    try:
+        frame_index = int(frame_index)
+    except (TypeError, ValueError):
+        frame_index = 0
+    position, quaternion = _export_camera_pose(_get_image_path(doc), frame_index)
+    if quaternion is None:
+        return doc
+    posed_doc = dict(doc)
+    posed_doc["camera_position"] = position
+    posed_doc["camera_quaternion"] = quaternion
+    return posed_doc
+
+
 def _gt_vectors(doc: dict) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
+    pose_doc = _camera_pose_doc(doc)
     names = [doc["diagnostic_anchor"], doc["diagnostic_target"]]
     if doc.get("source_task_family") == "object_centric_relative_position_multi":
         names.extend(str(name) for name in (doc.get("task_metadata") or {}).get("candidate_objects", []) if name)
@@ -115,7 +184,7 @@ def _gt_vectors(doc: dict) -> tuple[dict[str, dict[str, float]], dict[str, float
     for name in dict.fromkeys(names):
         obj = _get_object_record(doc, name)
         position = obj.get("position_3d") if obj else None
-        camera_to_object = _camera_frame_position(doc, position) if position else None
+        camera_to_object = _camera_frame_position(pose_doc, position) if position else None
         if camera_to_object:
             vectors[name] = {"camera_to_object": camera_to_object, "object_to_camera": {axis: -value for axis, value in camera_to_object.items()}}
     anchor = _get_object_record(doc, doc["diagnostic_anchor"])
@@ -124,7 +193,7 @@ def _gt_vectors(doc: dict) -> tuple[dict[str, dict[str, float]], dict[str, float
     if anchor and target and anchor.get("position_3d") and target.get("position_3d"):
         # This remains a camera-frame vector even though the text label below
         # is evaluated with the source task's anchor-relative convention.
-        between = _camera_frame_vector_from_world(doc, _vector_sub(target["position_3d"], anchor["position_3d"]))
+        between = _camera_frame_vector_from_world(pose_doc, _vector_sub(target["position_3d"], anchor["position_3d"]))
     return vectors, between
 
 
@@ -213,8 +282,11 @@ def process_results(doc, results):
     between_cosine = _cosine_similarity(prediction["between_objects"], gold_between)
     between_axis = _axis_alignment(prediction["between_objects"], gold_between)
     text_correct = _matches_text(prediction, doc)
-    directions_correct = float(vector_axis == 1.0 and between_axis == 1.0)
-    entry = {"qid": doc.get("qid"), "source_qid": doc.get("source_qid"), "task_family": doc.get("source_task_family"), "text_variant": doc.get("diagnostic_text_variant"), "vector_variant": requested, "text_answer_accuracy": text_correct, "vector_cosine": vector_cosine, "vector_axis_alignment": vector_axis, "between_objects_cosine": between_cosine, "between_objects_axis_alignment": between_axis, "directions_correct": directions_correct}
+    # The text answer resolves the anchor-to-target relation, so the joint
+    # answer/direction categories use that same between-object vector. Camera
+    # vectors for every listed object are still evaluated independently above.
+    directions_correct = float(between_axis == 1.0)
+    entry = {"qid": doc.get("qid"), "source_qid": doc.get("source_qid"), "task_family": doc.get("source_task_family"), "text_variant": doc.get("diagnostic_text_variant"), "vector_variant": requested, "text_answer_accuracy": text_correct, "vector_cosine": vector_cosine, "vector_axis_alignment": vector_axis, "all_object_vectors_axis_aligned": float(vector_axis == 1.0), "between_objects_cosine": between_cosine, "between_objects_axis_alignment": between_axis, "directions_correct": directions_correct}
     entry.update({"answer_and_direction_correct": float(text_correct and directions_correct), "answer_correct_direction_wrong": float(text_correct and not directions_correct), "answer_wrong_direction_correct": float(not text_correct and directions_correct), "answer_and_direction_wrong": float(not text_correct and not directions_correct)})
     return {"text_answer_accuracy": entry, "camera_to_object_cosine": entry, "object_to_camera_cosine": entry, "camera_to_object_axis_alignment": entry, "object_to_camera_axis_alignment": entry, "between_objects_cosine": entry, "between_objects_axis_alignment": entry, "answer_and_direction_correct": entry, "answer_correct_direction_wrong": entry, "answer_wrong_direction_correct": entry, "answer_and_direction_wrong": entry, "submission": {**entry, "question_prompt": doc_to_text(doc), "prediction": raw, "parsed_prediction": prediction, "gold_vectors": gold_vectors, "gold_between_objects": gold_between, "img_path": _get_image_path(doc)}}
 

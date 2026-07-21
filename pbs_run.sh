@@ -1,10 +1,10 @@
 #!/bin/bash
-#PBS -N lmms-Vec_Test
-#PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml03
+#PBS -N lmms-kubric_linear
+#PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml06
 
 # Activate the Conda environment
-# source /apps/miniconda3/etc/profile.d/conda.sh
-source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+source /apps/miniconda3/etc/profile.d/conda.sh
+# source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 cd /home/ramanathan/VLM/lmms-eval
 nvidia-smi
 conda activate lmms
@@ -12,7 +12,9 @@ conda activate lmms
 # vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench, stibench, vsibench_object_appearance_order, 
 # vsibench_baseline_bbox_object_size_estimation
 # vsibench_bbox_object_counting
-# 3dsrbench_parquet, 3dsrbench_variant, kubric_movi_a, kubric_movi_a_bbox_pred, kubric_movi_a_viewpoint, kubric_movi_a_direction_object, kubric_movi_a_direction_vector
+# 3dsrbench_parquet, 3dsrbench_variant, kubric_movi_a, kubric_movi_a_bbox_pred, comfort_viewpoint
+# kubric_movi_a_viewpoint, kubric_movi_a_direction_object, kubric_movi_a_direction_vector
+# kubric_movi_a_object_centric_3d, kubric_movi_a_object_centric_planar, kubric_movi_a_object_centric_linear
 # embspatial
 
 # qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct
@@ -25,13 +27,15 @@ conda activate lmms
 # LMMS_MASK_IMAGE=0 \
 # LMMS_EVAL_INCLUDE_GT_HELP_TEXT=6 \
 # LMMS_EVAL_VIEWPOINT_HINT_EXCLUDE_GOLD_ANSWER=1 \
+# LMMS_EVAL_DIRECTION_VECTOR_BALANCE_FAMILIES=1 \
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
-  --tasks kubric_movi_a_direction_vector \
+  --tasks kubric_movi_a_object_centric_linear \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_0
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_object_centric_linear_0
+  # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0
 

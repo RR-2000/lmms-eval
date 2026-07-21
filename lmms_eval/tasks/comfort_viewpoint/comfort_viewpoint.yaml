@@ -1,0 +1,39 @@
+dataset_name: null
+test_split: test
+task: "comfort_viewpoint"
+include: _default_template_yaml
+
+metric_list:
+  - metric: comfort_answer_accuracy
+    aggregation: !function utils.aggregate_answer_accuracy
+    higher_is_better: true
+  - metric: comfort_relation_axis_accuracy
+    aggregation: !function utils.aggregate_relation_axis_accuracy
+    higher_is_better: true
+  - metric: comfort_vector_cosine
+    aggregation: !function utils.aggregate_vector_cosine
+    higher_is_better: true
+  - metric: comfort_answer_and_direction_correct
+    aggregation: !function utils.aggregate_answer_and_direction_correct
+    higher_is_better: true
+  - metric: comfort_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: comfort_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: comfort_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: comfort_camera_answer_accuracy
+    aggregation: !function utils.aggregate_camera_answer_accuracy
+    higher_is_better: true
+  - metric: comfort_reference_answer_accuracy
+    aggregation: !function utils.aggregate_reference_answer_accuracy
+    higher_is_better: true
+  - metric: comfort_addressee_answer_accuracy
+    aggregation: !function utils.aggregate_addressee_answer_accuracy
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false
