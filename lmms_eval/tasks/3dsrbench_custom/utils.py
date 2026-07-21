@@ -4,8 +4,10 @@
 
 import json
 import os
+import random
 import re
 import string
+from collections import defaultdict
 from typing import Optional
 
 import pandas as pd
@@ -59,6 +61,19 @@ DEFAULT_COLOR_ORDER = [
     "maroon",
 ]
 IMG_BASE="/home/ramanathan/data/3dsrbench_data/images/coco_images"
+
+# Direction-versus-object diagnostic -------------------------------------------------
+#
+# 3DSRBench's ``multi_object_viewpoint_towards_object`` items ask which side of a
+# subject points towards a target object.  The diagnostic below keeps that exact
+# relation and makes a paired object-answer version: given the relevant side of
+# the subject, select the object it points towards.  Distractors are other
+# objects queried for the same underlying COCO image, rather than invented
+# names, so both variants remain grounded in the image.
+DIRECTION_OBJECT_QTYPE = "multi_object"
+DIRECTION_OBJECT_RELATION = "viewpoint towards object"
+DIRECTION_OBJECT_DIRECTIONS = {"left", "right", "front", "back"}
+DIRECTION_OBJECT_SAMPLE_SEED = "3dsrbench_direction_object_v1"
 
 def _parse_json_maybe(value):
     if isinstance(value, str):
@@ -929,6 +944,326 @@ def _get_submission_model_tag(args) -> str:
             return sanitize_model_name(match.group(1).strip())
 
     return "unknown_model"
+
+
+def _direction_object_image_key(doc: dict) -> str:
+    """Return a stable key for collecting candidate objects from one image."""
+    return str(
+        doc.get("image_name")
+        or doc.get("image_url")
+        or doc.get("resolved_img_path")
+        or doc.get("img_path")
+        or doc.get("qid", doc.get("index", ""))
+    )
+
+
+def _direction_object_terms(doc: dict) -> list[str]:
+    """Extract object names available in a source row without duplicates."""
+    values = [
+        doc.get("subject"),
+        doc.get("object1", doc.get("object_1")),
+        doc.get("object2", doc.get("object_2")),
+    ]
+    bbox_items = _parse_json_maybe(doc.get("bbox_items", []))
+    if isinstance(bbox_items, list):
+        values.extend(bbox_items)
+
+    terms = []
+    for value in values:
+        value = str(value or "").strip()
+        if value and value not in terms:
+            terms.append(value)
+    return terms
+
+
+def _direction_object_same_entity(left: str, right: str) -> bool:
+    """Treat abbreviated references (for example, ``truck``) as the subject."""
+    left = _normalize_text(left)
+    right = _normalize_text(right)
+    return bool(left and right and (left == right or left in right or right in left))
+
+
+def _direction_object_set_options(doc: dict, values: list[str], answer_value: str) -> None:
+    for index, letter in enumerate("ABCD"):
+        doc[letter] = values[index] if index < len(values) else None
+    doc["answer"] = "ABCD"[values.index(answer_value)]
+
+
+def direction_object_process_docs(dataset):
+    """Create matched direction-answer and object-answer 3DSRBench examples.
+
+    Only ``multi_object_viewpoint_towards_object`` is used because it specifies
+    both the direction (its native answer) and the target object.  Each source
+    row yields a native direction item plus an inverse object item.
+    """
+    image_terms = defaultdict(list)
+    docs = list(dataset)
+    for doc in docs:
+        bucket = image_terms[_direction_object_image_key(doc)]
+        for term in _direction_object_terms(doc):
+            if term not in bucket:
+                bucket.append(term)
+
+    records = []
+    skipped = 0
+    for doc in docs:
+        if (
+            _normalize_text(doc.get("qtype", "")) != DIRECTION_OBJECT_QTYPE
+            or _normalize_text(doc.get("relation", "")) != DIRECTION_OBJECT_RELATION
+        ):
+            continue
+
+        direction = _build_options(doc).get(_ground_truth_answer_letter(doc) or "", "")
+        direction = _normalize_text(direction)
+        subject = str(doc.get("subject", "")).strip()
+        target = str(doc.get("object1", doc.get("object_1", ""))).strip()
+        if direction not in DIRECTION_OBJECT_DIRECTIONS or not subject or not target:
+            skipped += 1
+            continue
+
+        source_qid = str(doc.get("qid", doc.get("index", "unknown")))
+        candidates = [target]
+        candidates.extend(
+            term
+            for term in image_terms[_direction_object_image_key(doc)]
+            if not _direction_object_same_entity(term, subject)
+            and not _direction_object_same_entity(term, target)
+        )
+        candidates = candidates[:4]
+        if len(candidates) < 2:
+            skipped += 1
+            continue
+        random.Random(f"{DIRECTION_OBJECT_SAMPLE_SEED}:{source_qid}").shuffle(candidates)
+
+        common = dict(doc)
+        common.update(
+            {
+                "source_qid": source_qid,
+                "source_task_family": "multi_object_viewpoint_towards_object",
+                "diagnostic_subject": subject,
+                "diagnostic_target_object": target,
+                "diagnostic_direction": direction,
+                "diagnostic_sample_seed": DIRECTION_OBJECT_SAMPLE_SEED,
+            }
+        )
+
+        native = dict(common)
+        native.update(
+            {
+                "qid": f"{source_qid}::native",
+                "index": f"{source_qid}::native",
+                "diagnostic_variant": "native",
+                "diagnostic_answer_format": "direction",
+                "diagnostic_target": direction,
+            }
+        )
+        records.append(native)
+
+        inverse = dict(common)
+        inverse.update(
+            {
+                "qid": f"{source_qid}::inverse",
+                "index": f"{source_qid}::inverse",
+                "question": (
+                    "Consider the real-world 3D locations and orientations of the objects. "
+                    f"Which object is in the direction that the {direction} side of the "
+                    f"{subject} points toward?"
+                ),
+                "original_question": "",
+                "diagnostic_variant": "inverse",
+                "diagnostic_answer_format": "object",
+                "diagnostic_target": target,
+            }
+        )
+        _direction_object_set_options(inverse, candidates, target)
+        records.append(inverse)
+
+    if skipped:
+        eval_logger.warning("Skipped %d 3DSR direction/object rows without a valid paired transformation.", skipped)
+    eval_logger.info(
+        "3DSR direction/object task created %d matched examples from %d source rows (seed=%s).",
+        len(records),
+        len(records) // 2,
+        DIRECTION_OBJECT_SAMPLE_SEED,
+    )
+    try:
+        from datasets import Dataset
+
+        return Dataset.from_list(records)
+    except ImportError:
+        # Kept for lightweight unit tests outside the lmms-eval environment.
+        return records
+
+
+def direction_object_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    del lmms_eval_specific_kwargs
+    options = _build_options(doc)
+    prompt = (
+        "Answer this spatial-reasoning question using the image. "
+        "Select one answer option and respond with its letter.\n"
+        f"Question: {doc.get('original_question') or doc.get('question') or _build_fallback_question(doc)}\nOptions:\n"
+    )
+    for letter, value in options.items():
+        prompt += f"{letter}. {value}\n"
+    return prompt
+
+
+def direction_object_doc_to_target(doc):
+    return _ground_truth_answer_letter(doc) or str(doc.get("answer", "")).strip()
+
+
+def direction_object_direct_answer_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    """Render the diagnostic with unlabelled values and a direct-text answer."""
+    del lmms_eval_specific_kwargs
+    options = [str(value).strip() for value in _build_options(doc).values() if value is not None]
+    return (
+        "Answer this spatial-reasoning question using the image. "
+        "Respond with the exact object or direction text, not an option letter.\n"
+        f"Question: {doc.get('original_question') or doc.get('question') or _build_fallback_question(doc)}\n"
+        f"Possible answers: {'; '.join(options)}\n"
+    )
+
+
+def direction_object_direct_answer_doc_to_target(doc):
+    return str(doc.get("diagnostic_target", "")).strip()
+
+
+def _direction_object_extract_direct_answer(text: str, options: list[str]) -> Optional[str]:
+    """Extract one displayed object/direction value, never a choice letter."""
+    normalized = _normalize_text(text).strip(".?!:;\"'")
+    if not normalized:
+        return None
+    normalized_options = {_normalize_text(option): option for option in options}
+    if normalized in normalized_options:
+        return normalized_options[normalized]
+    for option_norm, option in sorted(normalized_options.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"(?<!\w){re.escape(option_norm)}(?!\w)", normalized):
+            return option
+    return None
+
+
+def direction_object_process_results(doc, results):
+    prediction = results[0].strip() if results else ""
+    parsed = extract_answer(prediction)
+    gold = direction_object_doc_to_target(doc)
+    score = float(parsed == gold)
+    entry = {
+        "index": doc.get("index"),
+        "qid": doc.get("qid"),
+        "source_qid": doc.get("source_qid"),
+        "variant": doc.get("diagnostic_variant"),
+        "answer_format": doc.get("diagnostic_answer_format"),
+        "direction": doc.get("diagnostic_direction"),
+        "score": score,
+    }
+    return {
+        "accuracy": entry,
+        "object_answer_accuracy": entry,
+        "direction_answer_accuracy": entry,
+        "format_switch_gain": entry,
+        "object_minus_direction": entry,
+        "submission": {
+            **entry,
+            "question_prompt": direction_object_doc_to_text(doc),
+            "image_url": doc.get("image_url", doc.get("image")),
+            "prediction": prediction,
+            "parsed_prediction": parsed,
+            "gold_option": gold,
+            "gold_target": doc.get("diagnostic_target"),
+        },
+    }
+
+
+def direction_object_direct_answer_process_results(doc, results):
+    prediction = results[0].strip() if results else ""
+    options = [str(value).strip() for value in _build_options(doc).values() if value is not None]
+    parsed = _direction_object_extract_direct_answer(prediction, options)
+    gold = direction_object_direct_answer_doc_to_target(doc)
+    score = float(_normalize_text(parsed or "") == _normalize_text(gold))
+    entry = {
+        "index": doc.get("index"),
+        "qid": doc.get("qid"),
+        "source_qid": doc.get("source_qid"),
+        "variant": doc.get("diagnostic_variant"),
+        "answer_format": doc.get("diagnostic_answer_format"),
+        "direction": doc.get("diagnostic_direction"),
+        "score": score,
+    }
+    return {
+        "accuracy": entry,
+        "object_answer_accuracy": entry,
+        "direction_answer_accuracy": entry,
+        "format_switch_gain": entry,
+        "object_minus_direction": entry,
+        "submission": {
+            **entry,
+            "question_prompt": direction_object_direct_answer_doc_to_text(doc),
+            "image_url": doc.get("image_url", doc.get("image")),
+            "prediction": prediction,
+            "parsed_prediction": parsed,
+            "gold_target": gold,
+        },
+    }
+
+
+def _direction_object_mean(results, answer_format=None):
+    if answer_format is not None:
+        results = [result for result in results if result.get("answer_format") == answer_format]
+    return sum(result["score"] for result in results) / len(results) if results else 0.0
+
+
+def direction_object_aggregate_accuracy(results):
+    return _direction_object_mean(results)
+
+
+def direction_object_aggregate_object_answer_accuracy(results):
+    return _direction_object_mean(results, "object")
+
+
+def direction_object_aggregate_direction_answer_accuracy(results):
+    return _direction_object_mean(results, "direction")
+
+
+def direction_object_aggregate_format_switch_gain(results):
+    paired = defaultdict(dict)
+    for result in results:
+        paired[result.get("source_qid")][result.get("variant")] = result["score"]
+    differences = [
+        pair["inverse"] - pair["native"]
+        for pair in paired.values()
+        if {"native", "inverse"} <= pair.keys()
+    ]
+    return sum(differences) / len(differences) if differences else 0.0
+
+
+def direction_object_aggregate_object_minus_direction(results):
+    paired = defaultdict(dict)
+    for result in results:
+        paired[result.get("source_qid")][result.get("answer_format")] = result["score"]
+    differences = [
+        pair["object"] - pair["direction"]
+        for pair in paired.values()
+        if {"object", "direction"} <= pair.keys()
+    ]
+    return sum(differences) / len(differences) if differences else 0.0
+
+
+def direction_object_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"3dsrbench_direction_object_{_get_submission_model_tag(args)}.json", args
+    )
+    with open(path, "w") as file:
+        json.dump(results, file, indent=2)
+    eval_logger.info(f"3DSR direction/object records saved to {path}.")
+
+
+def direction_object_direct_answer_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"3dsrbench_direction_object_direct_answer_{_get_submission_model_tag(args)}.json", args
+    )
+    with open(path, "w") as file:
+        json.dump(results, file, indent=2)
+    eval_logger.info(f"3DSR direct-answer direction/object records saved to {path}.")
 
 
 def bbox_aggregate_results_for_submission(results, args):

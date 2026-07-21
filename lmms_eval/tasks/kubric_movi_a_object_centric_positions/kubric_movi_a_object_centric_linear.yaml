@@ -11,3 +11,15 @@ metric_list:
   - metric: object_centric_relative_position_viewpoint_answer_and_direction_correct
     aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_and_direction_correct
     higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_correct_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_correct_direction_wrong
+    higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_wrong_direction_correct
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_wrong_direction_correct
+    higher_is_better: true
+  - metric: object_centric_relative_position_viewpoint_answer_and_direction_wrong
+    aggregation: !function utils.aggregate_object_centric_relative_position_viewpoint_answer_and_direction_wrong
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_linear_results_for_submission
+    higher_is_better: false

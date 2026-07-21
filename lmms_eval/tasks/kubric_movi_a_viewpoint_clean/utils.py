@@ -432,6 +432,8 @@ def _get_camera_quaternion(doc) -> Optional[list[float]]:
     camera_metadata = doc.get("camera_metadata", {}) or {}
     camera_doc = doc.get("camera", {}) or {}
     frame_index = _get_frame_index(doc)
+    metadata_path = os.path.join(doc.get("img_path").split("/frames/")[0], "metadata.json")
+    metadata_json = json.load(open(metadata_path, "r")) if os.path.exists(metadata_path) else {}
 
     candidates = [
         metadata.get("camera_quaternion"),
@@ -443,11 +445,13 @@ def _get_camera_quaternion(doc) -> Optional[list[float]]:
         camera_doc.get("quaternion"),
         camera_doc.get("quaternions"),
         camera_doc.get("rotation"),
+        metadata_json.get("camera").get("quaternions")
     ]
     for candidate in candidates:
         selected = _select_frame_value(candidate, frame_index)
         if isinstance(selected, list) and len(selected) == 4:
-            return [float(selected[i]) for i in range(4)]
+            quat = [float(selected[i]) for i in range(4)]
+            return quat
     return None
 
 
@@ -532,6 +536,9 @@ def _vector_sub(a: list[float], b: list[float]) -> list[float]:
 def _vector_dot(a: list[float], b: list[float]) -> float:
     return float(sum(float(a[i]) * float(b[i]) for i in range(len(a))))
 
+def _vector_vector_mul(a: list[float], b: list[float]) -> list[float]:
+    assert len(a) == len(b), "Vectors must be of the same length for element-wise multiplication"
+    return [float(a[i]) * float(b[i]) for i in range(len(a))]
 
 def _vector_cross(a: list[float], b: list[float]) -> list[float]:
     return [
@@ -867,7 +874,7 @@ def _get_gt_spec(doc) -> dict:
         local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
         if local_vector:
             spec["vector"] = local_vector
-            spec["answer"] = _dominant_horizontal_relation(local_vector, gt_answer)
+            # spec["answer"] = _dominant_horizontal_relation(local_vector, gt_answer)
             spec["relation"] = spec["answer"]
 
     elif task_family == "object_centric_relative_position_multi":
@@ -907,13 +914,19 @@ def _get_gt_spec(doc) -> dict:
         )
         spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
         local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+
+        # Flip the L/R and F/B relations to be from the anchor object's perspective, looking back at the camera.
+        local_vector_rel = local_vector.copy() if local_vector else {"right": 0.0, "up": 0.0, "front": 0.0}
+        local_vector_rel["right"] *= -1.0
+        local_vector_rel["front"] *= -1.0
+
         if local_vector:
             spec["vector"] = local_vector
         axis = RELATION_TO_AXIS.get(relation)
         if axis:
             spec["answer"] = _binary_answer_from_relation(
                 relation,
-                float(spec["vector"].get(axis, 0.0)),
+                float(local_vector_rel.get(axis, 0.0)),
                 gt_answer,
             )
 

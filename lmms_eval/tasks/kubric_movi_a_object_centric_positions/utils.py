@@ -1,6 +1,9 @@
 """Prompt variants for paired Kubric MOVi-A object-centric position questions."""
 
+import json
+
 from lmms_eval.tasks.kubric_movi_a_viewpoint_clean import utils as viewpoint_utils
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 
 OBJECT_CENTRIC_POSITION_FAMILY = "object_centric_relative_position"
@@ -35,6 +38,39 @@ def aggregate_viewpoint_answer_accuracy(results):
 
 def aggregate_object_centric_relative_position_viewpoint_answer_and_direction_correct(results):
     return viewpoint_utils.aggregate_object_centric_relative_position_viewpoint_answer_and_direction_correct(results)
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_correct_direction_wrong(results):
+    return viewpoint_utils.aggregate_object_centric_relative_position_viewpoint_answer_correct_direction_wrong(results)
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_wrong_direction_correct(results):
+    return viewpoint_utils.aggregate_object_centric_relative_position_viewpoint_answer_wrong_direction_correct(results)
+
+
+def aggregate_object_centric_relative_position_viewpoint_answer_and_direction_wrong(results):
+    return viewpoint_utils.aggregate_object_centric_relative_position_viewpoint_answer_and_direction_wrong(results)
+
+
+def _aggregate_results_for_submission(results, args, representation):
+    model_tag = viewpoint_utils._get_submission_model_tag(args)
+    path = generate_submission_file(
+        f"kubric_movi_a_object_centric_{representation}_{model_tag}.json", args
+    )
+    with open(path, "w") as handle:
+        json.dump(results, handle, indent=2)
+
+
+def aggregate_3d_results_for_submission(results, args):
+    return _aggregate_results_for_submission(results, args, "3d")
+
+
+def aggregate_planar_results_for_submission(results, args):
+    return _aggregate_results_for_submission(results, args, "planar")
+
+
+def aggregate_linear_results_for_submission(results, args):
+    return _aggregate_results_for_submission(results, args, "linear")
 
 
 def aggregate_object_centric_relative_position_right_sign_accuracy(results):

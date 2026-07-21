@@ -187,6 +187,22 @@ def doc_to_target(doc):
     return str(doc.get("answer", "")).strip()
 
 
+def direct_answer_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    """Prompt the matched diagnostic without letter-labelled answer choices."""
+    del lmms_eval_specific_kwargs
+    options = [str(value).strip() for value in _get_options(doc).values() if value is not None]
+    prompt = (
+        "Answer this spatial-reasoning question using the image. "
+        "Respond with the exact object or direction text, not an option letter.\n"
+        f"Question: {doc['question']}\nPossible answers: {'; '.join(options)}\n"
+    )
+    return prompt
+
+
+def direct_answer_doc_to_target(doc):
+    return str(doc.get("diagnostic_target", "")).strip()
+
+
 def _extract_answer(text: str) -> Optional[str]:
     if not text:
         return None
@@ -194,6 +210,27 @@ def _extract_answer(text: str) -> Optional[str]:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             return match.group(1).upper()
+    return None
+
+
+def _normalize_direct_answer(text: str) -> str:
+    return " ".join(str(text).strip().lower().split())
+
+
+def _extract_direct_answer(text: str, options: list[str]) -> Optional[str]:
+    """Match a direct object/direction response to one of the displayed values."""
+    normalized = _normalize_direct_answer(text).strip(".?!:;\"'")
+    if not normalized:
+        return None
+    normalized_options = {_normalize_direct_answer(option): option for option in options}
+    if normalized in normalized_options:
+        return normalized_options[normalized]
+
+    # Permit short natural responses such as "The answer is left" while never
+    # accepting a letter as a surrogate answer.
+    for option_norm, option in sorted(normalized_options.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"(?<!\w){re.escape(option_norm)}(?!\w)", normalized):
+            return option
     return None
 
 
@@ -226,6 +263,43 @@ def process_results(doc, results):
             "parsed_prediction": parsed,
             "gold_option": doc.get("answer"),
             "gold_target": doc.get("diagnostic_target"),
+        },
+    }
+    for source_family in SOURCE_FAMILIES:
+        result[f"{source_family}_format_switch_gain"] = entry
+    return result
+
+
+def direct_answer_process_results(doc, results):
+    prediction = results[0].strip() if results else ""
+    options = [str(value).strip() for value in _get_options(doc).values() if value is not None]
+    parsed = _extract_direct_answer(prediction, options)
+    gold = direct_answer_doc_to_target(doc)
+    score = float(_normalize_direct_answer(parsed or "") == _normalize_direct_answer(gold))
+    entry = {
+        "index": doc.get("index"),
+        "qid": doc.get("qid"),
+        "source_qid": doc.get("source_qid"),
+        "source_task_family": doc.get("source_task_family"),
+        "difficulty": doc.get("difficulty", "unknown"),
+        "variant": doc.get("diagnostic_variant"),
+        "answer_format": doc.get("diagnostic_answer_format"),
+        "relation": doc.get("diagnostic_relation"),
+        "score": score,
+    }
+    result = {
+        "accuracy": entry,
+        "object_answer_accuracy": entry,
+        "direction_answer_accuracy": entry,
+        "format_switch_gain": entry,
+        "object_minus_direction": entry,
+        "submission": {
+            **entry,
+            "question_prompt": direct_answer_doc_to_text(doc),
+            "img_path": _get_image_path(doc),
+            "prediction": prediction,
+            "parsed_prediction": parsed,
+            "gold_target": gold,
         },
     }
     for source_family in SOURCE_FAMILIES:
@@ -297,3 +371,12 @@ def aggregate_results_for_submission(results, args):
     with open(path, "w") as file:
         json.dump(results, file, indent=2)
     eval_logger.info(f"Kubric direction/object records saved to {path}.")
+
+
+def direct_answer_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"kubric_movi_a_direction_object_direct_answer_{_submission_model_tag(args)}.json", args
+    )
+    with open(path, "w") as file:
+        json.dump(results, file, indent=2)
+    eval_logger.info(f"Kubric direct-answer direction/object records saved to {path}.")

@@ -22,7 +22,7 @@ from loguru import logger as eval_logger
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks.kubric_movi_a.utils import _get_image_path, _get_object_record, _get_options, doc_to_visual
-from lmms_eval.tasks.kubric_movi_a_viewpoint.utils import _camera_frame_position, _camera_frame_vector_from_world, _cosine_similarity, _get_camera_quaternion, _sign, _vector_sub
+from lmms_eval.tasks.kubric_movi_a_viewpoint_clean.utils import _camera_frame_position, _camera_frame_vector_from_world, _cosine_similarity, _get_camera_quaternion, _sign, _vector_sub
 from lmms_eval.utils import sanitize_model_name
 
 

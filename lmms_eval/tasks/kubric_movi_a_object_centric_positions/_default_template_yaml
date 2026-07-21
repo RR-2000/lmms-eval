@@ -1,7 +1,7 @@
 dataset_path: parquet
 dataset_kwargs:
   data_files:
-    test: /home/ramanathan/data/movi_a_3dsr/movi_a_validation.parquet
+    test: /home/ramanathan/data/movi_a_3dsr_new/movi_a_validation.parquet
 
 generation_kwargs:
   max_new_tokens: 256

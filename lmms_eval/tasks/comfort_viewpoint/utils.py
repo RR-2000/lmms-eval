@@ -50,7 +50,7 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
             str(doc["question"]),
             _coordinate_text(doc),
             "Return only valid JSON. The vector should not be a 0 vector.",
-            "`between_objects` must be variable-object minus reference-object in this viewpoint frame.",
+            "`between_objects` must be variable-object position minus reference-object position in this viewpoint frame.",
             'JSON schema: {"answer":"<left|right|front|behind>","between_objects":{"right":<float>,"up":<float>,"front":<float>}}',
         ]
     )

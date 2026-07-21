@@ -1,0 +1,36 @@
+dataset_name: null
+test_split: test
+task: "kubric_movi_a_direction_object_direct_answer"
+include: _default_template_yaml
+
+# Same matched examples as the base diagnostic, but options are unlabelled and
+# models must answer with the object or direction text itself.
+doc_to_text: !function utils.direct_answer_doc_to_text
+doc_to_target: !function utils.direct_answer_doc_to_target
+process_results: !function utils.direct_answer_process_results
+
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.aggregate_accuracy
+    higher_is_better: true
+  - metric: object_answer_accuracy
+    aggregation: !function utils.aggregate_object_answer_accuracy
+    higher_is_better: true
+  - metric: direction_answer_accuracy
+    aggregation: !function utils.aggregate_direction_answer_accuracy
+    higher_is_better: true
+  - metric: format_switch_gain
+    aggregation: !function utils.aggregate_format_switch_gain
+    higher_is_better: true
+  - metric: object_minus_direction
+    aggregation: !function utils.aggregate_object_minus_direction
+    higher_is_better: true
+  - metric: object_centric_relative_position_format_switch_gain
+    aggregation: !function utils.aggregate_object_centric_relative_position_format_switch_gain
+    higher_is_better: true
+  - metric: object_centric_relative_position_multi_format_switch_gain
+    aggregation: !function utils.aggregate_object_centric_relative_position_multi_format_switch_gain
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.direct_answer_aggregate_results_for_submission
+    higher_is_better: false
