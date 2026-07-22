@@ -33,14 +33,17 @@ def _vector(doc) -> dict[str, float]:
 
 def _coordinate_text(doc) -> str:
     system = doc.get("coordinate_system") or {}
-    right = system.get("right_axis_world_xy")
-    front = system.get("front_axis_world_xy")
-    if right is None or front is None:
+    Origin = system.get("origin")
+    right = system.get("right")
+    front = system.get("front")
+    up = system.get("up")
+    if Origin and right and front and up:
+        return (
+            f"The coordinate system has origin at {Origin}, "
+            f"right vector {right}, front vector {front}, and up vector {up}."
+        )
+    else:
         return "The vector axes are right, up, and front."
-    return (
-        "Use the supplied viewpoint frame: "
-        f"right axis in world XY={right}, front axis in world XY={front}, and up=world +Z."
-    )
 
 
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
@@ -49,9 +52,10 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
         [
             str(doc["question"]),
             _coordinate_text(doc),
-            "Return only valid JSON. The vector should not be a 0 vector.",
-            "`between_objects` must be variable-object position minus reference-object position in this viewpoint frame.",
-            'JSON schema: {"answer":"<left|right|front|behind>","between_objects":{"right":<float>,"up":<float>,"front":<float>}}',
+            "Return only valid JSON.",
+            "Return a `between_objects` vector, it must be variable-object position minus reference-object position in the camera frame.",
+            "The `between_objects` field is mandatory and is heavily evaluated. Never omit it and never use [0, 0, 0] unless the two objects are exactly coincident.",
+            'JSON schema: {"answer":"<left|right|front|behind>","between_objects":{"right":<float>,"front":<float>,"up":<float>}}',
         ]
     )
 
