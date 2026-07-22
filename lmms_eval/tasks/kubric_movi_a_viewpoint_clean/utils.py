@@ -51,6 +51,12 @@ RELATION_TO_AXIS = {
     "behind": "front",
 }
 
+AXIS_TO_RELATION = {
+    "right": ("left", "right"),
+    "up": ("above", "below", "higher", "lower"),
+    "front": ("closer", "farther", "front", "behind"),
+}
+
 POSITIVE_RELATIONS = {"right", "above", "higher", "closer", "front"}
 NEGATIVE_RELATIONS = {"left", "below", "lower", "farther", "behind"}
 
@@ -953,7 +959,8 @@ def _build_task_instructions(doc) -> str:
     target_object = gt_spec["target_object"]
 
     lines = [
-        "Return only valid JSON. Make sure to include all required fields in the JSON schema and don't output 0's for all fields.",
+        "[INSTRUCTIONS]",
+        "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
         "Use this canonical camera-frame convention for every 3D coordinate or vector you return:",
         "- The camera (POV) center is at the origin (0,0,0).",
         "- The camera is looking along the positive Y-axis.",
@@ -961,7 +968,12 @@ def _build_task_instructions(doc) -> str:
         "- `right` > 0 means the target is to the camera-right of the reference.",
         "- `up` > 0 means the target is to the camera-up of the reference.",
         "- `front` > 0 means the target is farther forward along the viewing direction",
+        "- 'answer' is the object/direction that satisfies the question from the perspective mentioned in the question.",
         "- `scale_ratio` means apparent target size divided by apparent reference size.",
+        "- 'relative_vector' is the target-minus-reference displacement in the camera frame described above in the format {'right':<float>,'up':<float>,'front':<float>}.",
+        "- 'camera_vector' is the direction from the anchor object to the camera in the format {'right':<float>,'up':<float>,'front':<float>}.",
+        "- 'camera_distance' is the Euclidean distance from the anchor object center to the camera",
+        "- Following are the rules for this particular task:",
     ]
 
     if task_family == "camera_relative_position":
@@ -969,8 +981,7 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference object: {reference_object}",
                 f"Target object: {target_object}",
-                f"Question relation to resolve: {relation}",
-                f"Answer with which object satisfies the question. The relative vector is the target-minus-reference displacement in the camera frame described above.",
+                f"Answer with which object satisfies the question.",
                 'JSON schema: {"answer":"<object name>","target_object":"'
                 + target_object
                 + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
@@ -981,8 +992,7 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference object: {reference_object}",
                 f"Target object: {target_object}",
-                f"Question relation to resolve: {relation}",
-                f"Answer with which object satisfies the question. The relative vector is the target-minus-reference displacement in the camera frame described above.",
+                f"Answer with which object satisfies the question.",
                 'JSON schema: {"answer":"<object name>","target_object":"'
                 + target_object
                 + '","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"scale_ratio":<float>}',
@@ -993,8 +1003,7 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference object: {reference_object}",
                 f"Target object: {target_object}",
-                f"Question relation to resolve: {relation}",
-                f"Answer with which object satisfies the question. The relative vector is the target-minus-reference displacement in the camera frame described above.",
+                f"Answer with which object satisfies the question.",
                 'JSON schema: {"answer":"<object name>","target_object":"'
                 + target_object
                 + '","relative_vector":{"right":0.0,"up":0.0,"front":<float>},"scale_ratio":<float>}',
@@ -1007,8 +1016,6 @@ def _build_task_instructions(doc) -> str:
                 f"Target object: {target_object}",
                 "Express the target-minus-anchor displacement in the camera frame described above.",
                 "The directions are relative to the reference anchor object, not the camera. The answer should be framed from the anchor object's perspective, look back at the camera.",
-                "Also provide `camera_vector`, the direction from the anchor object to the camera after the same camera-origin, camera-rotation transform.",
-                "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
                 f"Answer with the discrete relation word",
                 'JSON schema: {"answer":"<left|right|front|behind>","target_object":"'
                 + target_object
@@ -1024,8 +1031,6 @@ def _build_task_instructions(doc) -> str:
                 f"Candidate target objects: {candidate_text}",
                 "Express each candidate target relative to the anchor in the camera frame described above.",
                 "The directions are relative to the reference anchor object, not the camera. The answer should be framed from the anchor object's perspective, look back at the camera.",
-                "Also provide `camera_vector`, the direction from the anchor object to the camera after the same camera-origin, camera-rotation transform.",
-                "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
                 f"Answer with the chosen target object name",
                 'JSON schema: {"answer":"<object name>","target_object":"<object name>","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>,"scale_ratio":<float>}',
             ]
@@ -1035,11 +1040,8 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 f"Target object: {target_object}",
-                f"Queried relation to verify: {relation}",
                 "Express the target-minus-anchor displacement in the camera frame described above.",
                 "The directions are relative to the reference anchor object, not the camera. The answer should be framed from the anchor object's perspective, look back at the camera.",
-                "Also provide `camera_vector`, the direction from the anchor object to the camera after the same camera-origin, camera-rotation transform.",
-                "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
                 f"Answer with `yes` or `no`.",
                 'JSON schema: {"answer":"<yes|no>","target_object":"'
                 + target_object
@@ -1051,8 +1053,6 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 "Estimate the camera position relative to the anchor object in the canonical camera frame described above.",
-                "Because the camera is the origin, `camera_vector` should point from the anchor object back to the camera in that same frame.",
-                "Also provide `camera_distance`, the Euclidean distance from the anchor object center to the camera.",
                 f"Answer with the dominant horizontal relation word: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<left|right|front|behind>","camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>}',
             ]
@@ -1183,7 +1183,7 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     if help_mode in {"1", "2", "3", "4", "5", "6", "7", "8"}:
         gt_help = _build_viewpoint_GT_help(doc, help_mode)
 
-    prompt = f"Question: {question}\n{instructions}\n"
+    prompt = f"[Question]: {question}\n{instructions}\n"
     if gt_help:
         prompt += f"{gt_help}\n"
     return prompt

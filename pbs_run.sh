@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-kubric_movi_a_viewpoint_clean
+#PBS -N lmms-kubric_movi_a_object_centric_linear
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml06
 
 # Activate the Conda environment
@@ -33,10 +33,10 @@ conda activate lmms
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
-  --tasks kubric_movi_a_viewpoint_clean \
+  --tasks kubric_movi_a_object_centric_linear \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_clean_0
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_object_centric_linear_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0
