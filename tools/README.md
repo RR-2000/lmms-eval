@@ -92,6 +92,22 @@ python tools/score_3dsr_variant_majority.py \
   --output-json outputs/3dsrbench_variants/submissions/3dsrbench_predictions_qwen3_vl_experiments.majority_summary.json
 ```
 
+### `plot_kubric_movi_a_object_centric_positions.py`
+
+Visualize one Kubric MOVi-A object-centric position submission. The script
+groups examples by `task_family` and answer/direction correctness, then writes
+a 100% stacked outcome bar chart, a pie-chart grid, a correctness comparison,
+and `summary.json` beside the input, in `<input-stem>_plots`.
+
+```bash
+python tools/plot_kubric_movi_a_object_centric_positions.py \
+  --input outputs/kubric_movi_a_object_centric_3d_0/submissions/kubric_movi_a_object_centric_3d_qwen3_vl_experiments.json
+```
+
+For example, an input named `kubric_movi_a_object_centric_3d_qwen3_vl_experiments.json`
+produces `kubric_movi_a_object_centric_3d_qwen3_vl_experiments_plots/` in the
+same folder.
+
 ## Notebooks
 
 ### `make_image_hf_dataset.ipynb`
