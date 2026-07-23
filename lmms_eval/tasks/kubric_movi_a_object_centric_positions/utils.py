@@ -1,6 +1,7 @@
 """Prompt variants for paired Kubric MOVi-A object-centric position questions."""
 
 import json
+import os
 
 from lmms_eval.tasks.kubric_movi_a_viewpoint_clean import utils as viewpoint_utils
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
@@ -93,7 +94,7 @@ def _build_task_instructions_3D(doc) -> str:
     reference_object = gt_spec["reference_object"]
     target_object = gt_spec["target_object"]
 
-    lines = [
+    lines = [ "[IMPORTANT FORMATTING NOTE] Regardless of the thinking process, the final answer must adhere to the [INSTRUCTIONS] below as it is the only way to evaluate the answer\n" if os.environ.get("THINKING_FORMAT", "0") == "1" else "",
         "[INSTRUCTIONS]",
         "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
         "Use this canonical camera-frame convention for every 3D coordinate or vector you return:",
@@ -161,7 +162,7 @@ def _build_task_instructions_planar(doc) -> str:
     reference_object = gt_spec["reference_object"]
     target_object = gt_spec["target_object"]
 
-    lines = [
+    lines = [ "[IMPORTANT FORMATTING NOTE] Regardless of the thinking process, the final answer must adhere to the [INSTRUCTIONS] below as it is the only way to evaluate the answer\n" if os.environ.get("THINKING_FORMAT", "0") == "1" else "",
         "[INSTRUCTIONS]",
         "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
         "Use this canonical camera-frame convention for every 3D coordinate or vector you return:",
@@ -230,7 +231,7 @@ def _build_task_instructions_linear(doc) -> str:
     target_object = gt_spec["target_object"]
 
     axis = RELATION_TO_AXIS[relation]
-    lines = [
+    lines = [ "[IMPORTANT FORMATTING NOTE] Regardless of the thinking process, the final answer must adhere to the [INSTRUCTIONS] below as it is the only way to evaluate the answer\n" if os.environ.get("THINKING_FORMAT", "0") == "1" else "",
         "[INSTRUCTIONS]",
         "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
         "Use this canonical camera-frame convention for every 3D coordinate or vector you return:",
