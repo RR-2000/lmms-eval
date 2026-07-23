@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-kubric_movi_a_object_centric_linear
+#PBS -N Think-kubric_movi_a_object_centric_3d
 #PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml06
 
 # Activate the Conda environment
@@ -19,7 +19,7 @@ conda activate lmms
 # kubric_movi_a_object_centric_3d, kubric_movi_a_object_centric_planar, kubric_movi_a_object_centric_linear
 # embspatial
 
-# qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct
+# qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct, Qwen/Qwen3-VL-4B-Thinking
 # qwen2_5_vl, rayruiyang/VST-7B-RL
 # internvl3_5, OpenGVLab/InternVL3_5-4B
 # transformers=5.5.4, transformers<5
@@ -30,13 +30,14 @@ conda activate lmms
 # LMMS_EVAL_INCLUDE_GT_HELP_TEXT=6 \
 # LMMS_EVAL_VIEWPOINT_HINT_EXCLUDE_GOLD_ANSWER=1 \
 # LMMS_EVAL_DIRECTION_VECTOR_BALANCE_FAMILIES=1 \
+THINKING_FORMAT=1 \
 python -m lmms_eval \
   --model qwen3_vl_experiments \
-  --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
-  --tasks kubric_movi_a_object_centric_linear \
+  --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Thinking" \
+  --tasks kubric_movi_a_object_centric_3d \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_object_centric_linear_0
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_object_centric_thinking_3d_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0

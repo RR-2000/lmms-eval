@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgb
 
 
 DEFAULT_INPUT = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/comfort_viewpoint_0/"
-    "Qwen__Qwen3-VL-4B-Instruct/20260722_115910_results.json"
+    "/home/ramanathan/VLM/lmms-eval/outputs/comfort_viewpoint_0/Qwen__Qwen3-VL-4B-Instruct/20260722_142023_results.json"
 )
 TASK = "comfort_viewpoint"
 
@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         description="Plot COMFORT viewpoint metrics and infer failure modes."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument(
+        "--samples",
+        type=Path,
+        default=None,
+        help="Sample-level submission JSON. Auto-detected from the input run when omitted.",
+    )
     parser.add_argument("--task", default=TASK, help="Task key inside the result JSON.")
     parser.add_argument(
         "--output-dir",
@@ -83,6 +89,96 @@ def output_dir(input_path: Path, requested: Path | None) -> Path:
     directory = requested or input_path.parent / f"{input_path.stem}_analysis"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+def find_submission(input_path: Path, requested: Path | None) -> Path | None:
+    """Find the sample-level submission written by the COMFORT aggregator."""
+    if requested is not None:
+        return requested
+    submission_dir = input_path.parent.parent / "submissions"
+    candidates = sorted(submission_dir.glob("comfort_viewpoint_*.json"))
+    return candidates[-1] if candidates else None
+
+
+def load_samples(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, list):
+        raise ValueError(f"Expected a list of sample records in {path}")
+    return [row for row in payload if isinstance(row, dict)]
+
+
+def sample_outcome(row: dict[str, Any]) -> str:
+    if row.get("answer_and_direction_correct"):
+        return OUTCOME_METRICS[0]
+    if row.get("answer_correct_direction_wrong"):
+        return OUTCOME_METRICS[1]
+    if row.get("answer_wrong_direction_correct"):
+        return OUTCOME_METRICS[2]
+    return OUTCOME_METRICS[3]
+
+
+def plot_split_rectangles(samples: list[dict[str, Any]], directory: Path) -> Path | None:
+    """Draw proportional colored rectangles for each question viewpoint."""
+    if not samples:
+        return None
+    groups = [("All questions", samples)]
+    for viewpoint, label in (("camera", "Camera"), ("reference", "Reference"), ("addressee", "Addressee")):
+        rows = [row for row in samples if row.get("viewpoint") == viewpoint]
+        if rows:
+            groups.append((label, rows))
+
+    fig, ax = plt.subplots(figsize=(12, 1.25 + 0.8 * len(groups)))
+    for y, (label, rows) in enumerate(groups):
+        counts = {name: sum(sample_outcome(row) == name for row in rows) for name in OUTCOME_METRICS}
+        total = len(rows)
+        left = 0.0
+        for name, color in zip(OUTCOME_METRICS, OUTCOME_COLORS):
+            width = counts[name] / total
+            ax.barh(y, width, left=left, height=0.62, color=color, edgecolor="white", linewidth=0.6)
+            if width >= 0.045:
+                ax.text(left + width / 2, y, f"{width:.1%}", ha="center", va="center", fontsize=9)
+            left += width
+        ax.text(-0.012, y, f"{label} (n={total})", ha="right", va="center", fontsize=10)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.7, len(groups) - 0.3)
+    ax.set_yticks([])
+    ax.set_xlabel("Fraction of questions")
+    ax.set_title("COMFORT Answer/Direction Ratios")
+    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in OUTCOME_COLORS]
+    ax.legend(handles, [OUTCOME_LABELS[name] for name in OUTCOME_METRICS],
+              loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
+    ax.grid(axis="x", alpha=0.2)
+    fig.tight_layout()
+    path = directory / "answer_direction_split_rectangles.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_question_outcome_strip(samples: list[dict[str, Any]], directory: Path) -> Path | None:
+    """Show one colored cell per question, ordered by viewpoint."""
+    if not samples:
+        return None
+    ordered = sorted(samples, key=lambda row: (str(row.get("viewpoint", "")), str(row.get("qid", ""))))
+    colors = {name: color for name, color in zip(OUTCOME_METRICS, OUTCOME_COLORS)}
+    rgb = [to_rgb(colors[sample_outcome(row)]) for row in ordered]
+    fig, ax = plt.subplots(figsize=(15, 2.4))
+    ax.imshow([rgb], aspect="auto", interpolation="nearest")
+    ax.set_yticks([])
+    ax.set_xticks([])
+    ax.set_xlabel(f"{len(ordered)} questions; ordered by viewpoint and question id")
+    ax.set_title("Per-Question Answer/Direction Outcome")
+    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in OUTCOME_COLORS]
+    ax.legend(handles, [OUTCOME_LABELS[name] for name in OUTCOME_METRICS],
+              loc="upper center", bbox_to_anchor=(0.5, -0.32), ncol=2, frameon=False)
+    fig.tight_layout()
+    path = directory / "per_question_outcome_strip.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return path
 
 
 def annotate_bars(ax: Any, bars: Any) -> None:
@@ -209,10 +305,25 @@ def main() -> int:
     names = SUMMARY_METRICS + OUTCOME_METRICS
     values = {name: metric(results, name) for name in names}
     directory = output_dir(args.input, args.output_dir)
-    outputs = [plot_summary(values, directory), *plot_outcomes(values, directory), plot_question_types(values, directory), write_report(values, directory, args.input)]
+    samples_path = find_submission(args.input, args.samples)
+    samples = load_samples(samples_path)
+    outputs = [
+        plot_summary(values, directory),
+        *plot_outcomes(values, directory),
+        plot_question_types(values, directory),
+    ]
+    for path in (
+        plot_split_rectangles(samples, directory),
+        plot_question_outcome_strip(samples, directory),
+    ):
+        if path is not None:
+            outputs.append(path)
+    outputs.append(write_report(values, directory, args.input))
     print("Generated analysis artifacts:")
     for path in outputs:
         print(path)
+    if samples_path is None:
+        print("Sample-level submission not found; split-rectangle plots were skipped.")
     return 0
 
 
