@@ -1,0 +1,5 @@
+group: vsibench_object_rel_direction_vector
+task:
+  - vsibench_object_rel_direction_vector_easy
+  - vsibench_object_rel_direction_vector_medium
+  - vsibench_object_rel_direction_vector_hard

@@ -1,0 +1,37 @@
+dataset_name: object_rel_direction_easy
+test_split: test
+task: "vsibench_object_rel_direction_vector_easy"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: _default_template_yaml
+doc_to_text: !function utils.vsibench_vector_doc_to_text
+process_results: !function utils.vsibench_process_direction_vector_results
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    mca_post_prompt: "Return both the answer option letter and the direction vector. Format: Answer: A; Dir Vector: '[x, y]'"
+    na_post_prompt: "Please answer the question using a single word or phrase."
+metric_list:
+  - metric: submission
+    aggregation: !function utils.vsibench_aggregate_submission
+    higher_is_better: false
+  - metric: object_rel_direction_answer_accuracy
+    aggregation: !function utils.vsibench_aggregate_direction_answer_accuracy
+    higher_is_better: true
+  - metric: object_rel_direction_vector_accuracy
+    aggregation: !function utils.vsibench_aggregate_direction_vector_accuracy
+    higher_is_better: true
+  - metric: object_rel_direction_both_correct
+    aggregation: !function utils.vsibench_aggregate_direction_both_correct
+    higher_is_better: true
+  - metric: object_rel_direction_answer_correct_vector_wrong
+    aggregation: !function utils.vsibench_aggregate_direction_answer_correct_vector_wrong
+    higher_is_better: true
+  - metric: object_rel_direction_answer_wrong_vector_correct
+    aggregation: !function utils.vsibench_aggregate_direction_answer_wrong_vector_correct
+    higher_is_better: true
+  - metric: object_rel_direction_both_wrong
+    aggregation: !function utils.vsibench_aggregate_direction_both_wrong
+    higher_is_better: true

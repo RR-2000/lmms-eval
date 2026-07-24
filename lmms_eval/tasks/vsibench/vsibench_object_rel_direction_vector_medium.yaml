@@ -1,0 +1,8 @@
+dataset_name: object_rel_direction_medium
+test_split: test
+task: "vsibench_object_rel_direction_vector_medium"
+dataset_kwargs:
+  token: True
+  cache_dir: vsibench
+  video: True
+include: vsibench_object_rel_direction_vector_easy.yaml

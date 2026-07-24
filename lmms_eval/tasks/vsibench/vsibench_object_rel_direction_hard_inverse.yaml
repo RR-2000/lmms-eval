@@ -1,0 +1,43 @@
+dataset_name: null
+test_split: test
+task: "vsibench_object_rel_direction_hard_inverse"
+dataset_path: json
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/VSI-Bench_new/test.jsonl
+
+output_type: generate_until
+process_docs: !function utils.vsibench_inverse_process_docs
+doc_to_visual: !function utils.vsibench_doc_to_visual
+doc_to_text: !function utils.vsibench_inverse_doc_to_text
+doc_to_target: "ground_truth"
+process_results: !function utils.vsibench_inverse_process_results
+
+generation_kwargs:
+  max_new_tokens: 2048
+  temperature: 0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+
+metric_list:
+  - metric: submission
+    aggregation: !function utils.vsibench_aggregate_inverse_submission
+    higher_is_better: false
+  - metric: direct_accuracy
+    aggregation: !function utils.vsibench_aggregate_direct_accuracy
+    higher_is_better: true
+  - metric: inverse_accuracy
+    aggregation: !function utils.vsibench_aggregate_inverse_accuracy
+    higher_is_better: true
+  - metric: difference
+    aggregation: !function utils.vsibench_aggregate_inverse_difference
+    higher_is_better: true
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    mca_post_prompt: "Answer with the option's letter from the given choices directly."
+
+metadata:
+  - version: 1.0

@@ -1,5 +1,8 @@
 import os
-from functools import partial
+import re
+import json
+from datetime import datetime
+from functools import lru_cache, partial
 from pathlib import Path
 
 import datasets
@@ -7,6 +10,8 @@ import numpy as np
 import pandas as pd
 import yaml
 from loguru import logger as eval_logger
+
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 MCA_QUESTION_TYPES = [
     "object_rel_direction_easy",
@@ -31,6 +36,18 @@ METRICS_FOR_NA = {
     "MRA:.5:.95:.05": "partial(mean_relative_accuracy, start=.5, end=.95, interval=.05)",
 }
 
+DIR_TO_VECTOR = {
+    "A. front-left": [1, 1],
+    "B. front-right": [1, -1],
+    "C. back-left": [-1, 1],
+    "D. back-right": [-1, -1]
+}
+
+DIRECTION_QUESTION_TYPES = {
+    "object_rel_direction_easy",
+    "object_rel_direction_medium",
+    "object_rel_direction_hard",
+}
 
 hf_home = os.getenv("HF_HOME", "~/.cache/huggingface/")
 base_cache_dir = os.path.expanduser(hf_home)
@@ -90,7 +107,7 @@ def path_to_resolution(video_path):
 
     return width, height
 
-def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None, include_pred_vec=None):
     question = doc["question"]
 
     pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "") or "These are frames of a video."
@@ -140,7 +157,15 @@ def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
                     )
             if len(frame_entries) > 0:
                 pre_prompt += f" At time {time:.2f}s:[{', '.join(frame_entries)}]\n"
-    print(f"pre_prompt: {pre_prompt}")
+    # print(f"pre_prompt: {pre_prompt}")
+    post_question = ""
+    if include_pred_vec and doc["question_type"] in DIRECTION_QUESTION_TYPES:
+        answer = doc.get("ground_truth", None)
+        gt_dir = doc.get("options", ["A. front-left", "B. front-right", "C. back-left", "D. back-right"])[ord(answer) - ord("A")] if answer is not None else None
+        gt_vec = DIR_TO_VECTOR.get(gt_dir, None) if gt_dir is not None else None
+        if gt_vec is not None:
+            post_question += f"The right is +X and forward is +Y with the origin at the reference object and facing in the direction mentioned.\n"
+
     # exit()
     if doc["question_type"] in NA_QUESTION_TYPES:
         post_prompt = lmms_eval_specific_kwargs.get("na_post_prompt", "") or "Please answer the question using a single word or phrase."
@@ -148,9 +173,14 @@ def vsibench_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     elif doc["question_type"] in MCA_QUESTION_TYPES:
         options = "Options:\n" + "\n".join(doc["options"])
         post_prompt = lmms_eval_specific_kwargs.get("mca_post_prompt", "") or "Answer with the option's letter from the given choices directly."
-        return "\n".join([pre_prompt, question, options, post_prompt])
+        return "\n".join([pre_prompt, question, post_question, options, post_prompt])
     else:
         raise ValueError(f"Unknown question type: {doc['question_type']}")
+
+
+def vsibench_vector_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    """Prompt the direction variants for both the option letter and its vector."""
+    return vsibench_doc_to_text(doc, lmms_eval_specific_kwargs, include_pred_vec=True)
 
 
 def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:
@@ -160,8 +190,203 @@ def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:
     return dataset
 
 
+INVERSE_DIRECTION_TASK = "object_rel_direction_hard_inverse"
+_HARD_DIRECTION_RE = re.compile(
+    r"standing by the (.+?) and facing the (.+?), is the (.+?) to my",
+    re.IGNORECASE,
+)
+_DIRECTION_LABEL_RE = re.compile(r"^[A-D][.) :]\s*", re.IGNORECASE)
+_VSI_JSONL_PATH = "/home/ramanathan/data/VSI-Bench_new/test.jsonl"
+
+
+@lru_cache(maxsize=1)
+def _load_vsi_scene_object_pools():
+    """Collect object names mentioned by non-hard-direction rows per scene."""
+    jsonl_path = os.getenv("VSI_BENCH_JSONL", _VSI_JSONL_PATH)
+    pools = {}
+    with open(jsonl_path, encoding="utf-8") as data_file:
+        rows = [json.loads(line) for line in data_file if line.strip()]
+
+    for row in rows:
+        if row.get("question_type") == "object_rel_direction_hard":
+            continue
+        question = str(row.get("question", ""))
+        objects = []
+
+        # Object-counting, size, and distance questions.
+        objects.extend(re.findall(r"How many (.+?)\(s\)", question, re.IGNORECASE))
+        objects.extend(
+            re.findall(
+                r"longest dimension \(length, width, or height\) of the (.+?), measured",
+                question,
+                re.IGNORECASE,
+            )
+        )
+        objects.extend(
+            value
+            for match in re.findall(r"between the (.+?) and the (.+?) \(", question, re.IGNORECASE)
+            for value in match
+        )
+
+        # Multiple-choice questions often provide the scene objects directly.
+        for match in re.findall(r"\(([^()]*)\)", question):
+            if "," in match:
+                objects.extend(match.split(","))
+        appearance_match = re.search(
+            r"appearance order of the following categories in the video:\s*(.+?)(?:\n|$)",
+            question,
+            re.IGNORECASE,
+        )
+        if appearance_match:
+            objects.extend(appearance_match.group(1).split(","))
+
+        scene_pool = pools.setdefault(row.get("scene_name"), set())
+        scene_pool.update(
+            value.strip().lower()
+            for value in objects
+            if value.strip() and not value.strip().isdigit()
+        )
+    return pools
+
+
+def _hard_direction_parts(doc):
+    match = _HARD_DIRECTION_RE.search(str(doc.get("question", "")))
+    if not match:
+        raise ValueError(f"Could not parse hard-direction question: {doc.get('question')!r}")
+    return tuple(part.strip() for part in match.groups())
+
+
+def _direction_text(doc):
+    answer = str(doc.get("ground_truth", "")).strip().upper()
+    options = doc.get("options") or []
+    index = ord(answer) - ord("A")
+    if not 0 <= index < len(options):
+        raise ValueError(f"Invalid hard-direction answer/options for row {doc.get('id')}")
+    return _DIRECTION_LABEL_RE.sub("", str(options[index])).strip().lower()
+
+
+def _inverse_object_options(doc, target, anchor, facing):
+    pool = set(_load_vsi_scene_object_pools().get(doc.get("scene_name"), set()))
+    target = target.lower()
+    pool.add(target)
+    # The answer is always present; distractors are sampled deterministically
+    # from objects mentioned by other task families in this same scene.
+    distractors = sorted(pool - {target, anchor.lower(), facing.lower()})
+    seed_text = f"{doc.get('scene_name', '')}:{doc.get('id', '')}"
+    seed = sum((index + 1) * ord(char) for index, char in enumerate(seed_text)) % (2**32)
+    rng = np.random.default_rng(seed=seed)
+    if len(distractors) > 3:
+        distractors = list(rng.choice(distractors, size=3, replace=False))
+    options = [target] + distractors
+    rng.shuffle(options)
+    return [str(option) for option in options]
+
+
+def vsibench_inverse_process_docs(dataset: datasets.Dataset) -> datasets.Dataset:
+    """Create paired original and object-answer inverse hard-direction rows."""
+    records = []
+    for source_doc in dataset:
+        if source_doc.get("question_type") != "object_rel_direction_hard":
+            continue
+        anchor, facing, target = _hard_direction_parts(source_doc)
+        direction = _direction_text(source_doc)
+        options = _inverse_object_options(source_doc, target, anchor, facing)
+        inverse_answer = chr(ord("A") + options.index(target.lower()))
+        pair_id = str(source_doc.get("id", source_doc.get("question_id")))
+
+        direct = dict(source_doc)
+        direct.update(
+            {
+                "question_type": INVERSE_DIRECTION_TASK,
+                "pair_id": pair_id,
+                "variant": "direct",
+                "original_question": source_doc["question"],
+                "inverse_direction": direction,
+                "direct_ground_truth": source_doc["ground_truth"],
+                "inverse_ground_truth": inverse_answer,
+            }
+        )
+        records.append(direct)
+
+        inverse = dict(source_doc)
+        inverse.update(
+            {
+                "question_type": INVERSE_DIRECTION_TASK,
+                "question": (
+                    f"If I am standing by the {anchor} and facing the {facing}, "
+                    f"what is to my {direction}?"
+                ),
+                "options": [f"{letter}. {value}" for letter, value in zip("ABCD", options)],
+                "ground_truth": inverse_answer,
+                "pair_id": pair_id,
+                "variant": "inverse",
+                "original_question": source_doc["question"],
+                "inverse_direction": direction,
+                "direct_ground_truth": source_doc["ground_truth"],
+                "inverse_ground_truth": inverse_answer,
+            }
+        )
+        records.append(inverse)
+
+    eval_logger.info("VSiBench inverse hard-direction task created %d paired rows", len(records) // 2)
+    return datasets.Dataset.from_list(records)
+
+
+def vsibench_inverse_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    del lmms_eval_specific_kwargs
+    options = "\n".join(str(option) for option in doc.get("options", []))
+    return (
+        "Answer the spatial reasoning question using the video. "
+        "Respond with the letter of the correct option.\n"
+        f"Question: {doc['question']}\nOptions:\n{options}\n"
+    )
+
+
 def fuzzy_matching(pred):
     return pred.split(" ")[0].rstrip(".").strip()
+
+
+def _extract_answer_letter(prediction):
+    prediction = str(prediction).strip()
+    labeled = re.search(r"(?:answer|option)\s*(?:is|:|=)?\s*([A-D])\b", prediction, re.I)
+    if labeled:
+        return labeled.group(1).upper()
+    leading = re.match(r"\s*([A-D])(?:\s*[.) :]\s*|$)", prediction, re.I)
+    return leading.group(1).upper() if leading else None
+
+
+def _extract_direction_vector(prediction):
+    number = r"[-+]?\d+(?:\.\d+)?"
+    match = re.search(
+        rf"(?:dir(?:ection)?\s*)?vector\s*[:=]?\s*[\"'`]?\s*"
+        rf"\[\s*({number})\s*,\s*({number})\s*\]",
+        str(prediction),
+        re.I,
+    )
+    if not match:
+        return None
+    return tuple(float(value) for value in match.groups())
+
+
+def _direction_option_vector(option):
+    text = re.sub(r"^\s*[A-D]\s*[.):]\s*", "", str(option), flags=re.I)
+    text = text.lower().replace("_", "-").replace(" ", "-")
+    for direction, vector in DIR_TO_VECTOR.items():
+        direction_text = direction.split(". ", 1)[-1].replace(" ", "-")
+        if direction_text == text or direction_text in text:
+            return tuple(float(value) for value in vector)
+    return None
+
+
+def _direction_ground_truth_vector(doc):
+    answer = str(doc.get("ground_truth", "")).strip().upper()
+    if len(answer) != 1 or not "A" <= answer <= "Z":
+        return None
+    options = doc.get("options") or [
+        "A. front-left", "B. front-right", "C. back-left", "D. back-right"
+    ]
+    index = ord(answer) - ord("A")
+    return _direction_option_vector(options[index]) if index < len(options) else None
 
 
 def exact_match(pred, target):
@@ -211,6 +436,7 @@ def vsibench_process_results(doc, results):
 
     return {
         "vsibench_overall": doc,
+        "submission": _submission_record(doc),
         "obj_appearance_order_accuracy": doc,
         "object_abs_distance_mra": doc,
         "object_counting_mra": doc,
@@ -220,6 +446,168 @@ def vsibench_process_results(doc, results):
         "route_planning_accuracy": doc,
         "object_rel_direction_accuracy": doc,
     }
+
+
+def _submission_record(doc):
+    """Return the serializable fields needed to reproduce a VSiBench result."""
+    fields = (
+        "id",
+        "question_id",
+        "dataset",
+        "scene_name",
+        "question_type",
+        "question",
+        "options",
+        "ground_truth",
+        "prediction",
+    )
+    return {field: doc[field] for field in fields if field in doc}
+
+
+def vsibench_aggregate_submission(results, args):
+    """Save predictions for the current VSiBench task as a JSON submission."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = generate_submission_file(f"vsibench_submission_{timestamp}.json", args)
+    with open(path, "w", encoding="utf-8") as submission_file:
+        json.dump(results, submission_file, ensure_ascii=False, indent=2, default=str)
+    eval_logger.info(f"VSiBench submission saved to {path}")
+    return path
+
+
+def vsibench_inverse_process_results(doc, results):
+    """Score either member of a direct/inverse hard-direction pair."""
+    prediction = str(results[0]).strip() if results else ""
+    parsed = _extract_answer_letter(prediction)
+    score = float(parsed == str(doc.get("ground_truth", "")).strip().upper())
+    entry = {
+        "id": doc.get("id"),
+        "pair_id": doc.get("pair_id"),
+        "variant": doc.get("variant"),
+        "score": score,
+    }
+    submission = {
+        **entry,
+        "scene_name": doc.get("scene_name"),
+        "original_question": doc.get("original_question"),
+        "question": doc.get("question"),
+        "options": doc.get("options"),
+        "prediction": prediction,
+        "parsed_prediction": parsed,
+        "ground_truth": doc.get("ground_truth"),
+        "inverse_direction": doc.get("inverse_direction"),
+    }
+    return {
+        "submission": submission,
+        "direct_accuracy": entry,
+        "inverse_accuracy": entry,
+        "difference": entry,
+    }
+
+
+def _aggregate_inverse_accuracy(results, variant):
+    scores = [row["score"] for row in results if row.get("variant") == variant]
+    return round(float(np.mean(scores)), 6) if scores else 0.0
+
+
+def vsibench_aggregate_direct_accuracy(results):
+    return _aggregate_inverse_accuracy(results, "direct")
+
+
+def vsibench_aggregate_inverse_accuracy(results):
+    return _aggregate_inverse_accuracy(results, "inverse")
+
+
+def vsibench_aggregate_inverse_difference(results):
+    paired = {}
+    for row in results:
+        pair = paired.setdefault(row.get("pair_id"), {})
+        pair[row.get("variant")] = row["score"]
+    differences = [
+        pair["inverse"] - pair["direct"]
+        for pair in paired.values()
+        if "direct" in pair and "inverse" in pair
+    ]
+    return round(float(np.mean(differences)), 6) if differences else 0.0
+
+
+def vsibench_aggregate_inverse_submission(results, args):
+    """Save both direct and inverse predictions in one submission JSON file."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = generate_submission_file(
+        f"vsibench_object_rel_direction_hard_inverse_{timestamp}.json", args
+    )
+    with open(path, "w", encoding="utf-8") as submission_file:
+        json.dump(results, submission_file, ensure_ascii=False, indent=2, default=str)
+    eval_logger.info(f"VSiBench inverse hard-direction submission saved to {path}")
+    return path
+
+
+VECTOR_METRIC_NAMES = (
+    "object_rel_direction_answer_accuracy",
+    "object_rel_direction_vector_accuracy",
+    "object_rel_direction_both_correct",
+    "object_rel_direction_answer_correct_vector_wrong",
+    "object_rel_direction_answer_wrong_vector_correct",
+    "object_rel_direction_both_wrong",
+)
+
+
+def vsibench_process_direction_vector_results(doc, results):
+    """Score the answer letter and direction vector independently and jointly."""
+    prediction = results[0]
+    answer_correct = _extract_answer_letter(prediction) == str(doc.get("ground_truth", "")).strip().upper()
+    predicted_vector = _extract_direction_vector(prediction)
+    target_vector = _direction_ground_truth_vector(doc)
+    vector_correct = (
+        predicted_vector is not None
+        and target_vector is not None
+        and np.allclose(predicted_vector, target_vector)
+    )
+
+    outcomes = {
+        "object_rel_direction_answer_accuracy": float(answer_correct),
+        "object_rel_direction_vector_accuracy": float(vector_correct),
+        "object_rel_direction_both_correct": float(answer_correct and vector_correct),
+        "object_rel_direction_answer_correct_vector_wrong": float(answer_correct and not vector_correct),
+        "object_rel_direction_answer_wrong_vector_correct": float(not answer_correct and vector_correct),
+        "object_rel_direction_both_wrong": float(not answer_correct and not vector_correct),
+    }
+    doc["prediction"] = prediction
+    doc.update(outcomes)
+    return {
+        **{metric: doc for metric in VECTOR_METRIC_NAMES},
+        "submission": _submission_record(doc),
+    }
+
+
+def _aggregate_direction_vector_metric(results, metric):
+    if not results:
+        return 0.0
+    return round(float(np.mean([row[metric] for row in results])), 6)
+
+
+def vsibench_aggregate_direction_answer_accuracy(results):
+    return _aggregate_direction_vector_metric(results, "object_rel_direction_answer_accuracy")
+
+
+def vsibench_aggregate_direction_vector_accuracy(results):
+    return _aggregate_direction_vector_metric(results, "object_rel_direction_vector_accuracy")
+
+
+def vsibench_aggregate_direction_both_correct(results):
+    return _aggregate_direction_vector_metric(results, "object_rel_direction_both_correct")
+
+
+def vsibench_aggregate_direction_answer_correct_vector_wrong(results):
+    return _aggregate_direction_vector_metric(results, "object_rel_direction_answer_correct_vector_wrong")
+
+
+def vsibench_aggregate_direction_answer_wrong_vector_correct(results):
+    return _aggregate_direction_vector_metric(results, "object_rel_direction_answer_wrong_vector_correct")
+
+
+def vsibench_aggregate_direction_both_wrong(results):
+    return _aggregate_direction_vector_metric(results, "object_rel_direction_both_wrong")
 
 
 def _compute_all_subscores(results) -> dict:
