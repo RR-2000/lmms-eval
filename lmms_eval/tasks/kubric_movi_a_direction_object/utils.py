@@ -170,6 +170,106 @@ def process_docs(dataset: Dataset) -> Dataset:
     return Dataset.from_list(records)
 
 
+EXTENDED_DIRECTION_VARIANT = "direction_natural_language"
+EXTENDED_EXHAUSTIVE_VARIANT = "object_direction_exhaustive"
+EXTENDED_OPTION_LABELS = tuple("ABCDEFGHIJKLMNOP")
+
+
+def _set_extended_options(doc: dict, values: list[str], answer_value: str) -> None:
+    """Store an arbitrary number of labelled options for the extended task."""
+    doc["extended_options"] = values
+    doc["extended_option_labels"] = list(EXTENDED_OPTION_LABELS[: len(values)])
+    doc["extended_answer"] = EXTENDED_OPTION_LABELS[values.index(answer_value)]
+
+
+def _direction_document_options(doc: dict) -> list[str]:
+    return [
+        str(value).strip()
+        for value in _get_options(doc).values()
+        if value is not None
+    ]
+
+
+def _build_extended_variants(records: list[dict]) -> list[dict]:
+    """Add natural-language and exhaustive options to native/inverse pairs."""
+    by_source = defaultdict(list)
+    for doc in records:
+        by_source[doc.get("source_qid")].append(doc)
+
+    extended = []
+    for source_qid, pair in by_source.items():
+        direction_doc = next(
+            (doc for doc in pair if doc.get("diagnostic_answer_format") == "direction"),
+            None,
+        )
+        object_doc = next(
+            (doc for doc in pair if doc.get("diagnostic_answer_format") == "object"),
+            None,
+        )
+        if not direction_doc or not object_doc:
+            continue
+
+        relation = direction_doc["diagnostic_relation"]
+        anchor = direction_doc["diagnostic_anchor"]
+        target = direction_doc["diagnostic_target_object"]
+        direction_options = [
+            f"{target} {_relation_phrase(option)} {anchor}"
+            for option in DIRECTIONS
+        ]
+
+        natural = dict(direction_doc)
+        natural.update(
+            {
+                "qid": f"{source_qid}::direction_natural_language",
+                "index": f"{source_qid}::direction_natural_language",
+                "question": (
+                    f"Which statement correctly describes where the {target} is "
+                    f"relative to the {anchor}?"
+                ),
+                "diagnostic_variant": EXTENDED_DIRECTION_VARIANT,
+                "diagnostic_answer_format": "direction",
+                "diagnostic_target": direction_options[DIRECTIONS.index(relation)],
+            }
+        )
+        _set_extended_options(natural, direction_options, direction_options[DIRECTIONS.index(relation)])
+        extended.append(natural)
+
+        object_options = _direction_document_options(object_doc)
+        if target not in object_options:
+            object_options.insert(0, target)
+        object_options = object_options[:4]
+        exhaustive_options = [
+            f"{obj} {_relation_phrase(option)} {anchor}"
+            for obj in object_options
+            for option in DIRECTIONS
+        ]
+        correct_exhaustive_option = f"{target} {_relation_phrase(relation)} {anchor}"
+        exhaustive = dict(object_doc)
+        exhaustive.update(
+            {
+                "qid": f"{source_qid}::object_direction_exhaustive",
+                "index": f"{source_qid}::object_direction_exhaustive",
+                "question": (
+                    f"Which statement correctly describes the position of an object "
+                    f"relative to the {anchor}?"
+                ),
+                "diagnostic_variant": EXTENDED_EXHAUSTIVE_VARIANT,
+                "diagnostic_answer_format": "object_direction",
+                "diagnostic_target": correct_exhaustive_option,
+            }
+        )
+        _set_extended_options(exhaustive, exhaustive_options, correct_exhaustive_option)
+        extended.append(exhaustive)
+
+    return extended
+
+
+def extended_process_docs(dataset: Dataset) -> Dataset:
+    """Keep native/inverse rows and add both extended option formats."""
+    base_records = list(process_docs(dataset))
+    return Dataset.from_list(base_records + _build_extended_variants(base_records))
+
+
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     del lmms_eval_specific_kwargs
     options = _get_options(doc)
@@ -181,6 +281,25 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     for letter, value in options.items():
         prompt += f"{letter}. {value}\n"
     return prompt
+
+
+def extended_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    """Render the standard rows and the extended natural-language options."""
+    if not doc.get("extended_options"):
+        return doc_to_text(doc, lmms_eval_specific_kwargs)
+
+    prompt = (
+        "Answer this spatial-reasoning question using the image. "
+        "Select one answer option and respond with its option letter.\n"
+        f"Question: {doc['question']}\nOptions:\n"
+    )
+    for label, option in zip(doc["extended_option_labels"], doc["extended_options"]):
+        prompt += f"{label}. {option}\n"
+    return prompt
+
+
+def extended_doc_to_target(doc):
+    return str(doc.get("extended_answer", doc.get("answer", ""))).strip()
 
 
 def doc_to_target(doc):
@@ -207,6 +326,21 @@ def _extract_answer(text: str) -> Optional[str]:
     if not text:
         return None
     for pattern in (r"^\s*([A-D])(?:[.\s)]|$)", r"\b(?:answer|option)\s*(?:is|:)\s*([A-D])\b", r"\(([A-D])\)"):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return None
+
+
+def _extract_extended_answer(text: str, labels: list[str]) -> Optional[str]:
+    if not text:
+        return None
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    for pattern in (
+        rf"^\s*({label_pattern})(?:[.\s)]|$)",
+        rf"\b(?:answer|option)\s*(?:is|:)\s*({label_pattern})\b",
+        rf"\(({label_pattern})\)",
+    ):
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             return match.group(1).upper()
@@ -255,6 +389,8 @@ def process_results(doc, results):
         "direction_answer_accuracy": entry,
         "format_switch_gain": entry,
         "object_minus_direction": entry,
+        "direction_natural_language_gain_from_simple": entry,
+        "object_direction_exhaustive_gain_from_simple": entry,
         "submission": {
             **entry,
             "question_prompt": doc_to_text(doc),
@@ -264,6 +400,51 @@ def process_results(doc, results):
             "gold_option": doc.get("answer"),
             "gold_target": doc.get("diagnostic_target"),
         },
+    }
+    for source_family in SOURCE_FAMILIES:
+        result[f"{source_family}_format_switch_gain"] = entry
+    return result
+
+
+def extended_process_results(doc, results):
+    """Score standard rows plus the two extended option-format variants."""
+    if not doc.get("extended_options"):
+        return process_results(doc, results)
+
+    prediction = results[0].strip() if results else ""
+    labels = doc["extended_option_labels"]
+    parsed = _extract_extended_answer(prediction, labels)
+    score = float(parsed == str(doc.get("extended_answer", "")).strip().upper())
+    entry = {
+        "index": doc.get("index"),
+        "qid": doc.get("qid"),
+        "source_qid": doc.get("source_qid"),
+        "source_task_family": doc.get("source_task_family"),
+        "difficulty": doc.get("difficulty", "unknown"),
+        "variant": doc.get("diagnostic_variant"),
+        "answer_format": doc.get("diagnostic_answer_format"),
+        "relation": doc.get("diagnostic_relation"),
+        "score": score,
+    }
+    submission = {
+        **entry,
+        "question_prompt": extended_doc_to_text(doc),
+        "img_path": _get_image_path(doc),
+        "prediction": prediction,
+        "parsed_prediction": parsed,
+        "gold_option": doc.get("extended_answer"),
+        "gold_target": doc.get("diagnostic_target"),
+        "options": doc.get("extended_options"),
+    }
+    result = {
+        "accuracy": entry,
+        "object_answer_accuracy": entry,
+        "direction_answer_accuracy": entry,
+        "direction_natural_language_gain_from_simple": entry,
+        "object_direction_exhaustive_gain_from_simple": entry,
+        "direction_natural_language_accuracy": entry,
+        "object_direction_exhaustive_accuracy": entry,
+        "submission": submission,
     }
     for source_family in SOURCE_FAMILIES:
         result[f"{source_family}_format_switch_gain"] = entry
@@ -323,6 +504,52 @@ def aggregate_direction_answer_accuracy(results):
     return _mean([result["score"] for result in results if result.get("answer_format") == "direction"])
 
 
+def aggregate_direction_natural_language_accuracy(results):
+    return _mean(
+        [
+            result["score"]
+            for result in results
+            if result.get("variant") == EXTENDED_DIRECTION_VARIANT
+        ]
+    )
+
+
+def aggregate_object_direction_exhaustive_accuracy(results):
+    return _mean(
+        [
+            result["score"]
+            for result in results
+            if result.get("variant") == EXTENDED_EXHAUSTIVE_VARIANT
+        ]
+    )
+
+
+def _aggregate_gain_from_simple_direction(results, variant):
+    paired = defaultdict(dict)
+    for result in results:
+        pair = paired[result.get("source_qid")]
+        result_variant = result.get("variant")
+        if result_variant == variant:
+            pair["target"] = result["score"]
+        elif result_variant in {"native", "inverse"} and result.get("answer_format") == "direction":
+            pair["simple"] = result["score"]
+
+    gains = [
+        pair["target"] - pair["simple"]
+        for pair in paired.values()
+        if "target" in pair and "simple" in pair
+    ]
+    return _mean(gains)
+
+
+def aggregate_direction_natural_language_gain_from_simple(results):
+    return _aggregate_gain_from_simple_direction(results, EXTENDED_DIRECTION_VARIANT)
+
+
+def aggregate_object_direction_exhaustive_gain_from_simple(results):
+    return _aggregate_gain_from_simple_direction(results, EXTENDED_EXHAUSTIVE_VARIANT)
+
+
 def _paired_differences(results, source_family=None, comparison="switch"):
     paired = defaultdict(dict)
     for result in results:
@@ -380,3 +607,12 @@ def direct_answer_aggregate_results_for_submission(results, args):
     with open(path, "w") as file:
         json.dump(results, file, indent=2)
     eval_logger.info(f"Kubric direct-answer direction/object records saved to {path}.")
+
+
+def extended_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"kubric_movi_a_direction_object_extended_{_submission_model_tag(args)}.json", args
+    )
+    with open(path, "w") as file:
+        json.dump(results, file, indent=2)
+    eval_logger.info(f"Kubric extended direction/object records saved to {path}.")
