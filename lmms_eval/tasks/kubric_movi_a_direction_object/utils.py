@@ -179,7 +179,40 @@ def _set_extended_options(doc: dict, values: list[str], answer_value: str) -> No
     """Store an arbitrary number of labelled options for the extended task."""
     doc["extended_options"] = values
     doc["extended_option_labels"] = list(EXTENDED_OPTION_LABELS[: len(values)])
-    doc["extended_answer"] = EXTENDED_OPTION_LABELS[values.index(answer_value)]
+    labels = doc["extended_option_labels"]
+    doc["extended_answer"] = labels[values.index(answer_value)]
+
+    # Keep the normal A-P fields in sync as well.  This makes the transformed
+    # question/options visible to generic dataset consumers and prevents the
+    # extended rows from silently retaining the source A-D choices.
+    for label in EXTENDED_OPTION_LABELS:
+        doc[label] = None
+    for label, value in zip(labels, values):
+        doc[label] = value
+
+
+def _dataset_from_records(records: list[dict]) -> Dataset:
+    """Build a Dataset without dropping columns introduced by later rows.
+
+    ``Dataset.from_list`` infers its schema from the first row.  The extended
+    rows are appended after native/inverse rows, so fields such as
+    ``extended_options`` would otherwise disappear entirely.
+    """
+    keys = set().union(*(record.keys() for record in records))
+    normalized = [{key: record.get(key) for key in keys} for record in records]
+
+    # Seed Arrow's schema with a non-null example wherever one exists.  A
+    # leading ``None`` would otherwise infer a null-typed column for the
+    # extended list fields and reject the actual lists in later rows.
+    schema_seed = {
+        key: next(
+            (record[key] for record in normalized if record.get(key) is not None),
+            None,
+        )
+        for key in keys
+    }
+    dataset = Dataset.from_list([schema_seed] + normalized)
+    return dataset.select(range(1, len(normalized) + 1))
 
 
 def _direction_document_options(doc: dict) -> list[str]:
@@ -250,8 +283,8 @@ def _build_extended_variants(records: list[dict]) -> list[dict]:
                 "qid": f"{source_qid}::object_direction_exhaustive",
                 "index": f"{source_qid}::object_direction_exhaustive",
                 "question": (
-                    f"Which statement correctly describes the position of an object "
-                    f"relative to the {anchor}?"
+                    f"Which statement correctly identifies both an object and its "
+                    f"position relative to the {anchor}?"
                 ),
                 "diagnostic_variant": EXTENDED_EXHAUSTIVE_VARIANT,
                 "diagnostic_answer_format": "object_direction",
@@ -267,7 +300,8 @@ def _build_extended_variants(records: list[dict]) -> list[dict]:
 def extended_process_docs(dataset: Dataset) -> Dataset:
     """Keep native/inverse rows and add both extended option formats."""
     base_records = list(process_docs(dataset))
-    return Dataset.from_list(base_records + _build_extended_variants(base_records))
+    extended_records = _build_extended_variants(base_records)
+    return _dataset_from_records(base_records + extended_records)
 
 
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):

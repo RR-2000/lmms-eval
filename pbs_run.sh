@@ -1,16 +1,16 @@
 #!/bin/bash
-#PBS -N lmms-kubric_movi_a_viewpoint_clean_better_sample
-#PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml06
+#PBS -N lmms-kubric_movi_a_direction_object_extended
+#PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:host=cvml10
 
 # Activate the Conda environment
-source /apps/miniconda3/etc/profile.d/conda.sh
-# source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+# source /apps/miniconda3/etc/profile.d/conda.sh
+source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 cd /home/ramanathan/VLM/lmms-eval
 nvidia-smi
 conda activate lmms
 
 # vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench, stibench, vsibench_object_appearance_order, 
-# vsibench_baseline_bbox_object_size_estimation
+# vsibench_baseline_bbox_object_size_estimation, vsibench_object_rel_direction_vector_hard
 # vsibench_bbox_object_counting, vsibench_baseline_bbox_object_rel_direction_hard, vsibench_object_rel_direction_hard_inverse
 # 3dsrbench_parquet, 3dsrbench_variant, 3dsrbench_direction_object, 3dsrbench_direction_object_direct_answer
 # kubric_movi_a, kubric_movi_a_bbox_pred, comfort_viewpoint
@@ -34,11 +34,11 @@ conda activate lmms
 # THINKING_FORMAT=1 \
 python -m lmms_eval \
   --model qwen3_vl_experiments \
-  --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Thinking" \
-  --tasks kubric_movi_a_viewpoint_clean_better_sample \
+  --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
+  --tasks kubric_movi_a_direction_object_extended \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_clean_better_sample_0
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_object_extended_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0

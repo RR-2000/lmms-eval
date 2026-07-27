@@ -1,10 +1,10 @@
 #!/bin/bash
-#PBS -N COM-3DSR_direction_object
-#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:host=cvml03
+#PBS -N COM-Kubric_new
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:host=cvml10
 
 # Activate the Conda environment
-source /apps/miniconda3/etc/profile.d/conda.sh
-# source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+# source /apps/miniconda3/etc/profile.d/conda.sh
+source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 cd /home/ramanathan/VLM/lmms-eval
 nvidia-smi
 conda activate lmms
@@ -35,8 +35,8 @@ export OPENAI_API_KEY="<YOUR_OPENAI_API_KEY>"
 
 
 model=openai
-model_type=gpt-5.4-nano #gpt-5.6-luna
-task=3dsrbench_direction_object #3dsrbench_parquet, kubric_movi_a, kubric_movi_a_viewpoint_clean, kubric_movi_a_direction_object, 3dsrbench_direction_object
+model_type=gpt-5.6-luna #gpt-5.4-nano
+task=kubric_movi_a_viewpoint_clean_better_sample #kubric_movi_a_viewpoint_clean_better_sample, 3dsrbench_parquet, kubric_movi_a, kubric_movi_a_viewpoint_clean, kubric_movi_a_direction_object, 3dsrbench_direction_object
 conda activate lmms
 
 python -m lmms_eval \
@@ -45,7 +45,7 @@ python -m lmms_eval \
   --tasks $task \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_GPT5_4_Nano
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_GPT5_6_Luna
 
 # LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
