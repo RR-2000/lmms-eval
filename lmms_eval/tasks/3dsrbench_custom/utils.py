@@ -75,6 +75,23 @@ DIRECTION_OBJECT_RELATION = "viewpoint towards object"
 DIRECTION_OBJECT_DIRECTIONS = {"left", "right", "front", "back"}
 DIRECTION_OBJECT_SAMPLE_SEED = "3dsrbench_direction_object_v1"
 
+# Used only when a source image does not provide enough distinct queried
+# objects for the inverse object-choice prompt.  The pools make the synthetic
+# distractors semantically consistent with the target rather than padding with
+# arbitrary labels.  They deliberately contain broad COCO-style object names,
+# so this remains deterministic and requires no external model at evaluation
+# time.
+DIRECTION_OBJECT_THEMATIC_POOLS = {
+    "vehicle": ["car", "bus", "van", "bicycle", "motorcycle", "boat"],
+    "signage": ["traffic sign", "street sign", "parking sign", "billboard", "traffic light"],
+    "person": ["person", "man", "woman", "pedestrian", "child"],
+    "animal": ["dog", "cat", "horse", "bird", "cow", "elephant"],
+    "furniture": ["chair", "table", "couch", "bed", "cabinet", "lamp"],
+    "kitchen": ["refrigerator", "oven", "microwave", "sink", "bottle", "cup"],
+    "street": ["fire hydrant", "parking meter", "bench", "trash can", "bus stop"],
+    "generic": ["nearby object", "background object", "scene landmark", "other item"],
+}
+
 def _parse_json_maybe(value):
     if isinstance(value, str):
         stripped = value.strip()
@@ -983,6 +1000,72 @@ def _direction_object_same_entity(left: str, right: str) -> bool:
     return bool(left and right and (left == right or left in right or right in left))
 
 
+def _direction_object_theme(*terms: str) -> str:
+    """Infer a broad visual theme for deterministic fallback distractors."""
+    text = _normalize_text(" ".join(str(term or "") for term in terms))
+    themes = {
+        "vehicle": ("car", "truck", "bus", "van", "bicycle", "bike", "motorcycle", "boat", "train", "airplane"),
+        "signage": ("sign", "logo", "plaque", "board", "letter"),
+        "person": ("person", "man", "woman", "girl", "boy", "baby", "skier", "policeman", "pedestrian"),
+        "animal": ("dog", "cat", "horse", "cow", "elephant", "giraffe", "bird", "bear", "animal"),
+        "furniture": ("chair", "table", "couch", "bed", "cabinet", "lamp", "mirror", "stairs", "fireplace"),
+        "kitchen": ("fridge", "refrigerator", "oven", "microwave", "faucet", "sink", "bottle", "cup", "stove"),
+        "street": ("hydrant", "parking", "bench", "trash", "street", "sidewalk", "bus stop"),
+    }
+    for theme, keywords in themes.items():
+        if any(keyword in text for keyword in keywords):
+            return theme
+    return "generic"
+
+
+def _direction_object_four_options(
+    target: str, subject: str, image_candidates: list[str]
+) -> tuple[list[str], list[str]]:
+    """Return target plus three distinct, in-theme distractors.
+
+    Image-grounded object names are preferred.  If fewer than four are
+    available, a deterministic thematic pool supplies the remaining labels.
+    The generated labels are recorded separately for auditability.
+    """
+    candidates = []
+    generated = []
+
+    def add(value: str, is_generated: bool = False) -> None:
+        value = str(value or "").strip()
+        if not value or _direction_object_same_entity(value, subject):
+            return
+        if any(_direction_object_same_entity(value, candidate) for candidate in candidates):
+            return
+        candidates.append(value)
+        if is_generated:
+            generated.append(value)
+
+    # Keep the annotated target even when its wording overlaps the subject
+    # (for example, ``bus`` and ``bus stop``).
+    candidates.append(str(target).strip())
+    for candidate in image_candidates:
+        add(candidate)
+        if len(candidates) == 4:
+            return candidates, generated
+
+    # The target's class is the strongest indicator of an appropriate
+    # distractor theme; the subject may belong to a different class (for
+    # example, a truck pointing at a stop sign).
+    theme = _direction_object_theme(target)
+    for candidate in DIRECTION_OBJECT_THEMATIC_POOLS[theme] + DIRECTION_OBJECT_THEMATIC_POOLS["generic"]:
+        add(candidate, is_generated=True)
+        if len(candidates) == 4:
+            return candidates, generated
+
+    # The fixed pools above provide more than enough distinct candidates for
+    # normal 3DSR rows; retain a safe final fallback for unusual free-form text.
+    suffix = 1
+    while len(candidates) < 4:
+        add(f"thematic scene object {suffix}", is_generated=True)
+        suffix += 1
+    return candidates, generated
+
+
 def _direction_object_set_options(doc: dict, values: list[str], answer_value: str) -> None:
     for index, letter in enumerate("ABCD"):
         doc[letter] = values[index] if index < len(values) else None
@@ -1022,17 +1105,30 @@ def direction_object_process_docs(dataset):
             continue
 
         source_qid = str(doc.get("qid", doc.get("index", "unknown")))
-        candidates = [target]
-        candidates.extend(
+        image_candidates = [
             term
             for term in image_terms[_direction_object_image_key(doc)]
             if not _direction_object_same_entity(term, subject)
             and not _direction_object_same_entity(term, target)
-        )
-        candidates = candidates[:4]
-        if len(candidates) < 2:
+        ]
+        # Keep the original data-quality requirement: a paired object question
+        # must have at least one image-derived distractor in addition to its
+        # target.  The thematic generator only pads qualifying examples from
+        # two-to-four choices; it never turns a single-object row into an
+        # object-selection question.
+        image_derived_options = [target]
+        for candidate in image_candidates:
+            if not any(
+                _direction_object_same_entity(candidate, existing)
+                for existing in image_derived_options
+            ):
+                image_derived_options.append(candidate)
+        if len(image_derived_options) < 2:
             skipped += 1
             continue
+        candidates, generated_distractors = _direction_object_four_options(
+            target, subject, image_candidates
+        )
         random.Random(f"{DIRECTION_OBJECT_SAMPLE_SEED}:{source_qid}").shuffle(candidates)
 
         common = dict(doc)
@@ -1044,6 +1140,7 @@ def direction_object_process_docs(dataset):
                 "diagnostic_target_object": target,
                 "diagnostic_direction": direction,
                 "diagnostic_sample_seed": DIRECTION_OBJECT_SAMPLE_SEED,
+                "diagnostic_generated_object_distractors": generated_distractors,
             }
         )
 

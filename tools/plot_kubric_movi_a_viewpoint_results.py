@@ -47,6 +47,10 @@ CASE_COLORS = {
     "answer_and_direction_wrong": "#E76F51",
 }
 
+INVALID_DIRECTION_CASE = "invalid_zero_direction"
+INVALID_DIRECTION_LABEL = "Invalid Direction (0, 0, 0)"
+INVALID_DIRECTION_COLOR = "#6C757D"
+
 FAMILY_DISPLAY = {
     "camera_relative_position": "Camera Relative",
     "camera_distance": "Camera Distance",
@@ -175,6 +179,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory for plots and reports. Defaults next to the input JSON.",
     )
+    parser.add_argument(
+        "--submission-input",
+        type=Path,
+        default=None,
+        help=(
+            "Per-example submission JSON used for the invalid-direction plot. "
+            "Defaults to the sole JSON file in the input run's submissions directory."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -219,6 +232,81 @@ def family_case_metrics(results: dict[str, Any]) -> dict[str, dict[str, float]]:
             case: family_metric_value(results, family, case) or 0.0 for case in CASE_METRICS
         }
     return family_cases
+
+
+def find_submission_input(result_path: Path, submission_input: Path | None) -> Path | None:
+    """Return an explicit or unambiguous per-example submission file for a run."""
+    if submission_input is not None:
+        if not submission_input.is_file():
+            raise FileNotFoundError(f"Submission input not found: {submission_input}")
+        return submission_input
+
+    # Result paths are normally ``<run>/<model>/<timestamp>_results.json``.
+    run_dir = result_path.parent.parent
+    submissions_dir = run_dir / "submissions"
+    candidates = sorted(submissions_dir.glob("*.json")) if submissions_dir.is_dir() else []
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def load_submission_records(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, list):
+        raise ValueError(f"{path} must contain a JSON list of per-example submission records")
+    return [record for record in payload if isinstance(record, dict)]
+
+
+def is_invalid_zero_direction(record: dict[str, Any]) -> bool:
+    """Whether the vector used to score this example's direction is exactly zero."""
+    prediction = record.get("parsed_prediction")
+    if not isinstance(prediction, dict):
+        return False
+
+    vector_key = (
+        "camera_vector"
+        if record.get("task_family") == "object_centric_camera_pose"
+        else "relative_vector"
+    )
+    vector = prediction.get(vector_key)
+    if not isinstance(vector, dict):
+        return False
+
+    try:
+        return all(abs(float(vector.get(axis, 0.0))) <= 1e-8 for axis in ("right", "up", "front"))
+    except (TypeError, ValueError):
+        return False
+
+
+def family_case_metrics_with_invalid_direction(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
+    """Build mutually exclusive outcome shares, reserving a bucket for zero vectors."""
+    counts = {
+        family: {case: 0 for case in (*CASE_METRICS, INVALID_DIRECTION_CASE)}
+        for family in FAMILIES
+    }
+    totals = {family: 0 for family in FAMILIES}
+
+    for record in records:
+        family = record.get("task_family")
+        if family not in counts:
+            continue
+        totals[family] += 1
+        if is_invalid_zero_direction(record):
+            counts[family][INVALID_DIRECTION_CASE] += 1
+            continue
+        for case in CASE_METRICS:
+            if float(record.get(case, 0.0)) > 0.0:
+                counts[family][case] += 1
+                break
+
+    return {
+        family: {
+            case: counts[family][case] / totals[family] if totals[family] else 0.0
+            for case in (*CASE_METRICS, INVALID_DIRECTION_CASE)
+        }
+        for family in FAMILIES
+        if totals[family]
+    }
 
 
 def named_metrics(results: dict[str, Any], metric_names: list[str]) -> dict[str, float]:
@@ -382,6 +470,52 @@ def plot_family_case_splits(family_cases: dict[str, dict[str, float]], output_di
     fig.tight_layout()
 
     output_path = output_dir / "family_case_splits.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_family_case_splits_with_invalid_direction(
+    family_cases: dict[str, dict[str, float]], output_dir: Path
+) -> Path:
+    """Plot 100% stacked outcome bars with zero direction vectors as their own class."""
+    cases = (*CASE_METRICS, INVALID_DIRECTION_CASE)
+    labels = {**CASE_LABELS, INVALID_DIRECTION_CASE: INVALID_DIRECTION_LABEL}
+    colors = {**CASE_COLORS, INVALID_DIRECTION_CASE: INVALID_DIRECTION_COLOR}
+    families = list(family_cases)
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    left = [0.0] * len(families)
+    for case in cases:
+        values = [family_cases[family][case] for family in families]
+        bars = ax.barh(
+            [FAMILY_DISPLAY.get(family, family) for family in families],
+            values,
+            left=left,
+            color=colors[case],
+            label=labels[case],
+        )
+        for bar, value in zip(bars, values):
+            if value >= 0.045:
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_y() + bar.get_height() / 2.0,
+                    f"{value:.1%}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                )
+        left = [current + value for current, value in zip(left, values)]
+
+    ax.set_xlim(0.0, 1.0)
+    ax.xaxis.set_major_formatter(lambda value, _: f"{value:.0%}")
+    ax.set_xlabel("Share of samples")
+    ax.set_title("Per-Family Outcomes (Zero Directions Shown as Invalid)")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2, frameon=False)
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+
+    output_path = output_dir / "family_case_splits_with_invalid_zero_direction.png"
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return output_path
@@ -994,6 +1128,20 @@ def main() -> int:
             output_dir / "object_centric_camera_pose_metrics.png",
         ),
     ]
+    submission_input = find_submission_input(args.input, args.submission_input)
+    if submission_input is not None:
+        invalid_direction_cases = family_case_metrics_with_invalid_direction(
+            load_submission_records(submission_input)
+        )
+        if invalid_direction_cases:
+            outputs.append(
+                plot_family_case_splits_with_invalid_direction(invalid_direction_cases, output_dir)
+            )
+    else:
+        print(
+            "Skipping invalid zero-direction plot: provide --submission-input or place exactly one "
+            "per-example JSON in the run's submissions directory."
+        )
     report_txt, report_md = write_inference_report(
         metrics,
         family_cases,

@@ -22,7 +22,7 @@ conda activate lmms
 
 # LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \
-export OPENAI_API_KEY="<YOUR_OPENAI_API_KEY>"
+export OPENAI_API_KEY="<YOUR_OPENAI_API_KEY_HERE>"
 # LMMS_MASK_IMAGE=1 \
 # LMMS_EVAL_INCLUDE_GT_HELP_TEXT=0 \
 # python -m lmms_eval \
@@ -42,10 +42,11 @@ conda activate lmms
 python -m lmms_eval \
   --model $model \
   --model_args model=$model_type \
+  --gen_kwargs max_new_tokens=16384 \
   --tasks $task \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_GPT5_6_Luna
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_clean_better_sample_GPT5_6_Luna
 
 # LMMS_EVAL_EXPERIMENTS_ATTENTION_DIR=./experiment_artifacts_3dsr_split/qwen3_4B_GT_0_Blank LMMS_EVAL_EXPERIMENTS_SAVE_ATTN=1 \
 # LMMS_EVAL_INCLUDE_LOCATION_TEXT=0 \

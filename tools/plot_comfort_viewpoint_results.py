@@ -30,6 +30,9 @@ OUTCOME_LABELS = {
     OUTCOME_METRICS[3]: "Answer + direction wrong",
 }
 OUTCOME_COLORS = ["#2A9D8F", "#E9C46A", "#F4A261", "#E76F51"]
+INVALID_DIRECTION_OUTCOME = "invalid_zero_direction"
+INVALID_DIRECTION_LABEL = "Invalid direction (0, 0, 0)"
+INVALID_DIRECTION_COLOR = "#6C757D"
 
 METRIC_LABELS = {
     "comfort_answer_accuracy": "Overall answer",
@@ -119,6 +122,25 @@ def sample_outcome(row: dict[str, Any]) -> str:
     return OUTCOME_METRICS[3]
 
 
+def has_invalid_zero_direction(row: dict[str, Any]) -> bool:
+    """Return whether the submitted direction vector is exactly (0, 0, 0)."""
+    prediction = row.get("parsed_prediction")
+    if not isinstance(prediction, dict):
+        return False
+    vector = prediction.get("between_objects", prediction.get("relative_vector", {}))
+    if not isinstance(vector, dict):
+        return False
+    try:
+        return all(abs(float(vector.get(axis, 0.0))) <= 1e-8 for axis in ("right", "up", "front"))
+    except (TypeError, ValueError):
+        return False
+
+
+def sample_outcome_with_invalid_direction(row: dict[str, Any]) -> str:
+    """Reserve a mutually exclusive outcome class for invalid zero vectors."""
+    return INVALID_DIRECTION_OUTCOME if has_invalid_zero_direction(row) else sample_outcome(row)
+
+
 def plot_split_rectangles(samples: list[dict[str, Any]], directory: Path) -> Path | None:
     """Draw proportional colored rectangles for each question viewpoint."""
     if not samples:
@@ -153,6 +175,51 @@ def plot_split_rectangles(samples: list[dict[str, Any]], directory: Path) -> Pat
     ax.grid(axis="x", alpha=0.2)
     fig.tight_layout()
     path = directory / "answer_direction_split_rectangles.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_split_rectangles_with_invalid_direction(
+    samples: list[dict[str, Any]], directory: Path
+) -> Path | None:
+    """Draw 100% outcome rectangles with zero direction vectors shown separately."""
+    if not samples:
+        return None
+    groups = [("All questions", samples)]
+    for viewpoint, label in (("camera", "Camera"), ("reference", "Reference"), ("addressee", "Addressee")):
+        rows = [row for row in samples if row.get("viewpoint") == viewpoint]
+        if rows:
+            groups.append((label, rows))
+
+    outcomes = [*OUTCOME_METRICS, INVALID_DIRECTION_OUTCOME]
+    labels = {**OUTCOME_LABELS, INVALID_DIRECTION_OUTCOME: INVALID_DIRECTION_LABEL}
+    colors = [*OUTCOME_COLORS, INVALID_DIRECTION_COLOR]
+    fig, ax = plt.subplots(figsize=(12, 1.25 + 0.8 * len(groups)))
+    for y, (label, rows) in enumerate(groups):
+        counts = {name: sum(sample_outcome_with_invalid_direction(row) == name for row in rows) for name in outcomes}
+        total = len(rows)
+        left = 0.0
+        for name, color in zip(outcomes, colors):
+            width = counts[name] / total
+            ax.barh(y, width, left=left, height=0.62, color=color, edgecolor="white", linewidth=0.6)
+            if width >= 0.045:
+                ax.text(left + width / 2, y, f"{width:.1%}", ha="center", va="center", fontsize=9)
+            left += width
+        ax.text(-0.012, y, f"{label} (n={total})", ha="right", va="center", fontsize=10)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.7, len(groups) - 0.3)
+    ax.set_yticks([])
+    ax.xaxis.set_major_formatter(lambda value, _: f"{value:.0%}")
+    ax.set_xlabel("Share of questions")
+    ax.set_title("COMFORT Outcomes (Zero Directions Shown as Invalid)")
+    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in colors]
+    ax.legend(handles, [labels[name] for name in outcomes],
+              loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
+    ax.grid(axis="x", alpha=0.2)
+    fig.tight_layout()
+    path = directory / "answer_direction_split_rectangles_with_invalid_zero_direction.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return path
@@ -314,6 +381,7 @@ def main() -> int:
     ]
     for path in (
         plot_split_rectangles(samples, directory),
+        plot_split_rectangles_with_invalid_direction(samples, directory),
         plot_question_outcome_strip(samples, directory),
     ):
         if path is not None:
