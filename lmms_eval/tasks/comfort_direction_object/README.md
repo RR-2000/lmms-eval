@@ -1,23 +1,19 @@
-# COMFORT direction versus object
+# COMFORT Multi 3D direction versus object
 
-`comfort_direction_object` converts COMFORT rows containing three distinct
-objects (variable, reference, and addressee) plus the camera into two matched
-two-option questions. The direction variant
-asks for the variable object's relation to the reference object. The object
-variant states that same relation and asks for the variable object.
+`comfort_direction_object` evaluates the native paired annotations in
+`/home/ramanathan/data/COMFORT_Multi_3D/annotations.jsonl`.
 
-The pair retains the source image, source qid, scene, viewpoint, objects,
-relation, and frame deviation. The object choices are only the two non-anchor
-objects: the target and the addressee. The direction choices are reduced to the
-gold relation and one randomly selected incorrect relation. Both option sets
-are shuffled with a deterministic per-sample seed. No synthetic or absent
-object choices are added. Rows are dropped when the addressee has the same
-relation to the anchor, because both object choices would then be correct.
+Each of the 200 rendered scenes contains one reference object and four target
+objects placed at its left, right, front, and behind directions. For every
+scene/relation, the dataset supplies a direction-answer prompt and an
+object-answer prompt with the same image, reference, target, relation, and gold
+option position. Four controlled permutations place the answer once at each of
+A, B, C, and D, producing 3,200 matched pairs and 6,400 examples.
 
-The task reports overall and per-format accuracy, paired object-minus-direction
-gain, the four paired outcomes, parse-success rates, and accuracy for camera,
-reference, and addressee viewpoints. Submission records include the exact
-model prompt, options, prediction, gold answer, and image path.
+The task uses the dataset's questions and options directly. It does not add,
+remove, or reshuffle options. Paired metrics group only rows sharing scene,
+relation, and answer position. Submission records include the exact prompt,
+options, prediction, gold answer, and resolved local image path.
 
 Run a smoke evaluation with:
 

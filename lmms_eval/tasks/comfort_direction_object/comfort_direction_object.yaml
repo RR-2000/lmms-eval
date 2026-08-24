@@ -1,8 +1,8 @@
-dataset_path: parquet
+dataset_path: json
 dataset_name: null
 dataset_kwargs:
   data_files:
-    test: /home/ramanathan/data/COMFORT/comfort_spatial_reasoning.parquet
+    test: /home/ramanathan/data/COMFORT_Multi_3D/annotations.jsonl
 task: "comfort_direction_object"
 test_split: test
 output_type: generate_until
@@ -56,15 +56,6 @@ metric_list:
   - metric: both_wrong
     aggregation: !function utils.aggregate_both_wrong
     higher_is_better: false
-  - metric: camera_accuracy
-    aggregation: !function utils.aggregate_camera_accuracy
-    higher_is_better: true
-  - metric: reference_accuracy
-    aggregation: !function utils.aggregate_reference_accuracy
-    higher_is_better: true
-  - metric: addressee_accuracy
-    aggregation: !function utils.aggregate_addressee_accuracy
-    higher_is_better: true
   - metric: submission
     aggregation: !function utils.aggregate_results_for_submission
     higher_is_better: false

@@ -14,7 +14,7 @@ doc_to_target: !function utils.doc_to_target
 process_results: !function utils.process_results
 
 generation_kwargs:
-  max_new_tokens: 16
+  max_new_tokens: 64
   temperature: 0.0
   top_p: 1.0
   do_sample: false
@@ -35,23 +35,9 @@ metric_list:
   - metric: object_minus_direction
     aggregation: !function utils.aggregate_object_minus_direction
     higher_is_better: true
-  - metric: parse_success_rate
-    aggregation: !function utils.aggregate_parse_success_rate
-    higher_is_better: true
-  - metric: object_parse_success_rate
-    aggregation: !function utils.aggregate_object_parse_success_rate
-    higher_is_better: true
-  - metric: direction_parse_success_rate
-    aggregation: !function utils.aggregate_direction_parse_success_rate
-    higher_is_better: true
   - metric: submission
     aggregation: !function utils.aggregate_results_for_submission
     higher_is_better: false
-
-lmms_eval_specific_kwargs:
-  default:
-    pre_prompt: ""
-    post_prompt: ""
 
 metadata:
   - version: 1.0

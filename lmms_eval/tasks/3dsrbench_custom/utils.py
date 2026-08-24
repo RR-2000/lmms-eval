@@ -1363,6 +1363,199 @@ def direction_object_direct_answer_aggregate_results_for_submission(results, arg
     eval_logger.info(f"3DSR direct-answer direction/object records saved to {path}.")
 
 
+# Multi-family direction-versus-object diagnostic -----------------------------
+#
+# This expands the original viewpoint-only diagnostic to the requested source
+# families.  Every pair is built with the source row's number of native choices
+# (two or four), and is discarded if that many distinct image-grounded object
+# labels are not available for an object-answer inverse.
+MULTI_FAMILY_DIRECTION_OBJECT_CATEGORIES = {
+    "orientation_in_front_of",
+    "orientation_on_the_left",
+    "orientation_viewpoint",
+    "multi_object_viewpoint_towards_object",
+    "multi_object_facing",
+    "multi_object_closer_to",
+}
+MULTI_FAMILY_DIRECTION_OBJECT_SEED = "3dsrbench_direction_object_multifamily_v1"
+
+
+def _multifamily_object_choices(
+    target: str, subject: str, image_terms: list[str], count: int, source_qid: str
+) -> list[str] | None:
+    """Return exactly ``count`` distinct, image-grounded choices including target."""
+    choices = [target]
+    for term in image_terms:
+        if _direction_object_same_entity(term, subject):
+            continue
+        if any(_direction_object_same_entity(term, choice) for choice in choices):
+            continue
+        choices.append(term)
+        if len(choices) == count:
+            break
+    if len(choices) != count:
+        return None
+    random.Random(f"{MULTI_FAMILY_DIRECTION_OBJECT_SEED}:{source_qid}").shuffle(choices)
+    return choices
+
+
+def _multifamily_pair_spec(doc: dict, category: str) -> dict[str, object] | None:
+    """Return the matched native/inverse prompt specification for one source row."""
+    subject = str(doc.get("subject", "")).strip()
+    object1 = str(doc.get("object1", doc.get("object_1", ""))).strip()
+    object2 = str(doc.get("object2", doc.get("object_2", ""))).strip()
+    source_options = _build_options(doc)
+    gold_letter = _ground_truth_answer_letter(doc)
+    gold_source = _normalize_text(source_options.get(gold_letter, ""))
+    if not subject or not object1:
+        return None
+
+    if category == "orientation_in_front_of":
+        choices = ["in front of", "behind"]
+        gold = "in front of" if gold_source in {"yes", "in front of"} else "behind"
+        question = f"From {object1}'s perspective, where is {subject}?"
+        return {"native_options": choices, "native_answer": gold, "native_target": gold,
+                "native_question": question, "native_format": "direction",
+                "inverse_options": None, "inverse_answer": object1, "inverse_target": object1}
+    if category == "orientation_on_the_left":
+        choices = ["on the left", "on the right"]
+        gold = "on the left" if gold_source in {"yes", "on the left"} else "on the right"
+        question = f"From {object1}'s perspective, where is {subject}?"
+        return {"native_options": choices, "native_answer": gold, "native_target": gold,
+                "native_question": question, "native_format": "direction",
+                "inverse_options": None, "inverse_answer": object1, "inverse_target": object1}
+    if category in {"orientation_viewpoint", "multi_object_viewpoint_towards_object"}:
+        choices = ["left", "right", "front", "back"]
+        gold = gold_source
+        if gold not in choices:
+            return None
+        if category == "orientation_viewpoint":
+            question = f"From the camera's viewpoint, which direction of {subject} faces the camera?"
+            target = object1
+        else:
+            question = f"Relative to its current viewpoint, which direction should {object1} turn to face {subject}?"
+            target = object1
+        return {"native_options": choices, "native_answer": gold, "native_target": gold,
+                "native_question": question, "native_format": "direction",
+                "inverse_options": None, "inverse_answer": target, "inverse_target": target}
+    if category == "multi_object_facing":
+        native_choices = [str(value).strip() for value in source_options.values() if str(value).strip()]
+        if len(native_choices) != 2 or gold_source not in {_normalize_text(value) for value in native_choices}:
+            return None
+        target = next(value for value in native_choices if _normalize_text(value) == gold_source)
+        return {"native_options": native_choices, "native_answer": target, "native_target": target,
+                "native_question": str(doc.get("original_question") or doc.get("question") or _build_fallback_question(doc)),
+                "native_format": "object", "inverse_options": ["toward", "away from"],
+                "inverse_answer": "toward", "inverse_target": "toward",
+                "inverse_question": f"Is {subject} facing toward or away from {target}?"}
+    if category == "multi_object_closer_to":
+        native_choices = [str(value).strip() for value in source_options.values() if str(value).strip()]
+        if len(native_choices) != 2 or gold_source not in {_normalize_text(value) for value in native_choices}:
+            return None
+        target = next(value for value in native_choices if _normalize_text(value) == gold_source)
+        return {"native_options": native_choices, "native_answer": target, "native_target": target,
+                "native_question": str(doc.get("original_question") or doc.get("question") or _build_fallback_question(doc)),
+                "native_format": "object", "inverse_options": ["closer to", "farther from"],
+                "inverse_answer": "closer to", "inverse_target": "closer to",
+                "inverse_question": f"Is {subject} closer to or farther from {target}?"}
+    return None
+
+
+def multifamily_direction_object_process_docs(dataset):
+    """Create matched pairs from orientation and requested multi-object rows."""
+    docs = list(dataset)
+    image_terms = defaultdict(list)
+    for doc in docs:
+        bucket = image_terms[_direction_object_image_key(doc)]
+        for term in _direction_object_terms(doc):
+            if term not in bucket:
+                bucket.append(term)
+
+    records = []
+    skipped = 0
+    for doc in docs:
+        category = _get_relation_category(doc)
+        if category not in MULTI_FAMILY_DIRECTION_OBJECT_CATEGORIES:
+            continue
+        transformed = _multifamily_pair_spec(doc, category)
+        if transformed is None:
+            skipped += 1
+            continue
+        native_choices = list(transformed["native_options"])
+        native_answer = str(transformed["native_answer"])
+        native_target = str(transformed["native_target"])
+        native_question = str(transformed["native_question"])
+        native_format = str(transformed["native_format"])
+        inverse_choices = transformed["inverse_options"]
+        inverse_answer = str(transformed["inverse_answer"])
+        inverse_target = str(transformed["inverse_target"])
+        target = inverse_target if native_format == "direction" else native_target
+        subject = str(doc.get("subject", "")).strip()
+        source_qid = str(doc.get("qid", doc.get("index", "unknown")))
+        if native_format == "direction":
+            inverse_choices = _multifamily_object_choices(
+                target, subject, image_terms[_direction_object_image_key(doc)], len(native_choices), source_qid
+            )
+            if inverse_choices is None:
+                skipped += 1
+                continue
+        if not isinstance(inverse_choices, list) or len(inverse_choices) != len(native_choices):
+            skipped += 1
+            continue
+
+        common = dict(doc)
+        common.update({
+            "source_qid": source_qid,
+            "source_task_family": category,
+            "diagnostic_subject": subject,
+            "diagnostic_target_object": target,
+            "diagnostic_direction": native_answer if native_format == "direction" else inverse_answer,
+            "diagnostic_num_options": len(native_choices),
+            "diagnostic_sample_seed": MULTI_FAMILY_DIRECTION_OBJECT_SEED,
+        })
+        native = dict(common)
+        native.update({
+            "qid": f"{source_qid}::native", "index": f"{source_qid}::native",
+            "question": native_question, "original_question": "",
+            "diagnostic_variant": "native", "diagnostic_answer_format": native_format,
+            "diagnostic_target": native_target,
+        })
+        _direction_object_set_options(native, native_choices, native_answer)
+        inverse = dict(common)
+        inverse.update({
+            "qid": f"{source_qid}::inverse", "index": f"{source_qid}::inverse",
+            "question": (
+                str(transformed.get("inverse_question")) if native_format == "object" else
+                "Consider the real-world 3D locations and orientations of the objects. "
+                f"Which object is related to {subject} as {native_answer}?"
+            ),
+            "original_question": "", "diagnostic_variant": "inverse",
+            "diagnostic_answer_format": "direction" if native_format == "object" else "object",
+            "diagnostic_target": inverse_target,
+        })
+        _direction_object_set_options(inverse, inverse_choices, inverse_answer)
+        records.extend((native, inverse))
+
+    eval_logger.info(
+        "3DSR multi-family direction/object task created %d pairs; skipped %d source rows.",
+        len(records) // 2, skipped,
+    )
+    try:
+        from datasets import Dataset
+        return Dataset.from_list(records)
+    except ImportError:
+        return records
+
+
+def multifamily_direction_object_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"3dsrbench_direction_object_multifamily_{_get_submission_model_tag(args)}.json", args
+    )
+    with open(path, "w") as file:
+        json.dump(results, file, indent=2)
+    eval_logger.info(f"3DSR multi-family direction/object records saved to {path}.")
+
+
 def bbox_aggregate_results_for_submission(results, args):
     model_tag = _get_submission_model_tag(args)
     path = generate_submission_file(f"3dsrbench_bbox_predictions_{model_tag}.json", args)

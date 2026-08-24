@@ -55,14 +55,24 @@ def _relation_phrase(relation: str) -> str:
     }[relation]
 
 
-def _multiple_object_options(doc: dict, anchor: str, target: str, source_qid: str) -> list[str]:
-    """Select up to four visible object candidates, always including target and anchor."""
+def _multiple_object_options(
+    doc: dict, anchor: str, target: str, source_qid: str
+) -> Optional[list[str]]:
+    """Select exactly four visible object candidates, including target and anchor.
+
+    Direction choices always contain the four canonical relations.  Returning
+    ``None`` for a scene with fewer than four distinct object candidates lets
+    callers drop that source instead of producing an unmatched three-choice
+    object prompt for its four-choice direction counterpart.
+    """
     visible_names = [str(obj.get("name", "")) for obj in doc.get("visible_objects", []) if obj.get("name")]
     candidates = [target]
     if anchor != target:
         candidates.append(anchor)
     candidates.extend(name for name in visible_names if name not in candidates)
     candidates = candidates[:4]
+    if len(candidates) != 4:
+        return None
     random.Random(source_qid).shuffle(candidates)
     return candidates
 
@@ -126,6 +136,11 @@ def process_docs(dataset: Dataset) -> Dataset:
             }
         )
 
+        object_options = _multiple_object_options(doc, anchor, target, source_qid)
+        if object_options is None:
+            skipped += 1
+            continue
+
         native = dict(common)
         native.update(
             {
@@ -136,6 +151,10 @@ def process_docs(dataset: Dataset) -> Dataset:
                 "diagnostic_target": relation if doc["task_family"] == "object_centric_relative_position" else target,
             }
         )
+        if doc["task_family"] == "object_centric_relative_position":
+            _set_options(native, list(DIRECTIONS), relation)
+        else:
+            _set_options(native, object_options, target)
         records.append(native)
 
         inverse = dict(common)
@@ -147,12 +166,11 @@ def process_docs(dataset: Dataset) -> Dataset:
             }
         )
         if doc["task_family"] == "object_centric_relative_position":
-            options = _multiple_object_options(doc, anchor, target, source_qid)
             inverse["question"] = (
                 f"Imagine standing at the {anchor} and facing the camera. Which object is "
                 f"{_relation_phrase(relation)} the {anchor}?"
             )
-            _set_options(inverse, options, target)
+            _set_options(inverse, object_options, target)
             inverse["diagnostic_answer_format"] = "object"
             inverse["diagnostic_target"] = target
         else:
