@@ -77,6 +77,31 @@ def _multiple_object_options(
     return candidates
 
 
+def _multiple_object_options_without_anchor(
+    doc: dict, anchor: str, target: str, source_qid: str
+) -> Optional[list[str]]:
+    """Select four object choices without offering the reference anchor.
+
+    This is used by the clean-better matched diagnostic.  Its direction and
+    object formulations both have four answer choices, while the object
+    formulation offers the target exactly once plus three non-anchor
+    distractors.  The anchor remains in the question because it defines the
+    object-centric frame of reference, but is never an answer option.
+    """
+    visible_names = [str(obj.get("name", "")) for obj in doc.get("visible_objects", []) if obj.get("name")]
+    candidates = [target]
+    candidates.extend(
+        name
+        for name in visible_names
+        if name not in candidates and name != anchor
+    )
+    candidates = candidates[:4]
+    if len(candidates) != 4:
+        return None
+    random.Random(f"{source_qid}::without_anchor").shuffle(candidates)
+    return candidates
+
+
 def _set_options(doc: dict, values: list[str], answer_value: str) -> None:
     for index, letter in enumerate("ABCD"):
         doc[letter] = values[index] if index < len(values) else None
@@ -185,6 +210,119 @@ def process_docs(dataset: Dataset) -> Dataset:
 
     if skipped:
         eval_logger.warning(f"Skipped {skipped} Kubric rows without a valid matched transformation.")
+    return Dataset.from_list(records)
+
+
+def clean_better_process_docs(dataset: Dataset) -> Dataset:
+    """Create matched four-choice direction/object pairs from clean-better data.
+
+    Object variants contain the target and three distractors, excluding the
+    reference anchor from their answer options.  Direction variants retain the
+    four canonical direction choices, ensuring a matched option count.
+    """
+    records = []
+    skipped = 0
+    candidates = {family: [] for family in SOURCE_FAMILIES}
+    for doc in dataset:
+        family = doc.get("task_family")
+        if family in candidates:
+            candidates[family].append(doc)
+
+    sampled_count = min(len(items) for items in candidates.values()) if candidates else 0
+    sampler = random.Random(f"{SAMPLE_SEED}::clean_better")
+    sampled_docs = []
+    for family in sorted(candidates):
+        sampled_docs.extend(sampler.sample(candidates[family], sampled_count))
+
+    eval_logger.info(
+        "Kubric clean-better direction/object task sampled %d source items per family "
+        "(%d source items total; %d native/inverse examples total).",
+        sampled_count,
+        sampled_count * len(candidates),
+        sampled_count * len(candidates) * 2,
+    )
+
+    for doc in sampled_docs:
+        family = doc["task_family"]
+        relation = _relation(doc)
+        metadata = doc.get("task_metadata") or {}
+        anchor = str(metadata.get("anchor_object", "")).strip()
+        target = (
+            str(metadata.get("target_object", "")).strip()
+            if family == "object_centric_relative_position"
+            else str(metadata.get("correct_object", _answer_text(doc))).strip()
+        )
+        if not relation or not anchor or not target or target == anchor:
+            skipped += 1
+            continue
+
+        source_qid = str(doc.get("qid", doc.get("index", "unknown")))
+        object_options = _multiple_object_options_without_anchor(doc, anchor, target, source_qid)
+        if object_options is None:
+            skipped += 1
+            continue
+
+        common = dict(doc)
+        common.update(
+            {
+                "source_qid": source_qid,
+                "source_task_family": family,
+                "diagnostic_relation": relation,
+                "diagnostic_anchor": anchor,
+                "diagnostic_target_object": target,
+                "diagnostic_option_count": 4,
+                "diagnostic_sampled_source_count_per_family": sampled_count,
+                "diagnostic_sample_seed": f"{SAMPLE_SEED}::clean_better",
+            }
+        )
+
+        native = dict(common)
+        native.update(
+            {
+                "qid": f"{source_qid}::native",
+                "index": f"{source_qid}::native",
+                "diagnostic_variant": "native",
+                "diagnostic_answer_format": "direction" if family == "object_centric_relative_position" else "object",
+                "diagnostic_target": relation if family == "object_centric_relative_position" else target,
+            }
+        )
+        if family == "object_centric_relative_position":
+            _set_options(native, list(DIRECTIONS), relation)
+        else:
+            _set_options(native, object_options, target)
+        records.append(native)
+
+        inverse = dict(common)
+        inverse.update(
+            {
+                "qid": f"{source_qid}::inverse",
+                "index": f"{source_qid}::inverse",
+                "diagnostic_variant": "inverse",
+            }
+        )
+        if family == "object_centric_relative_position":
+            inverse["question"] = (
+                f"Imagine standing at the {anchor} and facing the camera. Which object is "
+                f"{_relation_phrase(relation)} the {anchor}?"
+            )
+            _set_options(inverse, object_options, target)
+            inverse["diagnostic_answer_format"] = "object"
+            inverse["diagnostic_target"] = target
+        else:
+            inverse["question"] = (
+                f"Imagine standing at the {anchor} and facing the camera. "
+                f"Where is the {target} relative to the {anchor}?"
+            )
+            _set_options(inverse, list(DIRECTIONS), relation)
+            inverse["diagnostic_answer_format"] = "direction"
+            inverse["diagnostic_target"] = relation
+        records.append(inverse)
+
+    if skipped:
+        eval_logger.warning(
+            "Skipped %d clean-better Kubric rows without four non-anchor object choices.",
+            skipped,
+        )
     return Dataset.from_list(records)
 
 

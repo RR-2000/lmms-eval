@@ -1,0 +1,41 @@
+dataset_name: null
+test_split: test
+task: "3dsrbench_generated_direction_object"
+
+dataset_path: json
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/3DSR/viewpoint_direction_generated.jsonl
+
+generation_kwargs:
+  max_new_tokens: 4096
+  temperature: 0.0
+  top_p: 1.0
+  do_sample: false
+
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.direction_object_doc_to_text
+doc_to_target: !function utils.direction_object_doc_to_target
+process_results: !function utils.direction_object_process_results
+
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.direction_object_aggregate_accuracy
+    higher_is_better: true
+  - metric: object_answer_accuracy
+    aggregation: !function utils.direction_object_aggregate_object_answer_accuracy
+    higher_is_better: true
+  - metric: direction_answer_accuracy
+    aggregation: !function utils.direction_object_aggregate_direction_answer_accuracy
+    higher_is_better: true
+  - metric: object_minus_direction
+    aggregation: !function utils.direction_object_aggregate_object_minus_direction
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.direction_object_aggregate_results_for_submission
+    higher_is_better: false
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""

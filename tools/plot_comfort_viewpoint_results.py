@@ -81,6 +81,50 @@ def load_results(path: Path, task: str) -> dict[str, Any]:
     return results
 
 
+def values_from_samples(samples: list[dict[str, Any]]) -> dict[str, float]:
+    """Aggregate the metrics available in an LMMS-eval submission JSON."""
+    if not samples:
+        raise ValueError("The submission JSON contains no sample records")
+    field_map = {
+        "comfort_answer_accuracy": "answer_accuracy",
+        "comfort_relation_axis_accuracy": "relation_axis_accuracy",
+        "comfort_vector_cosine": "vector_cosine",
+        "comfort_answer_and_direction_correct": "answer_and_direction_correct",
+        "comfort_answer_correct_direction_wrong": "answer_correct_direction_wrong",
+        "comfort_answer_wrong_direction_correct": "answer_wrong_direction_correct",
+        "comfort_answer_and_direction_wrong": "answer_and_direction_wrong",
+    }
+    values = {
+        metric_name: sum(float(row.get(field_name, 0.0)) for row in samples) / len(samples)
+        for metric_name, field_name in field_map.items()
+    }
+    for viewpoint, metric_name in (
+        ("camera", "comfort_camera_answer_accuracy"),
+        ("reference", "comfort_reference_answer_accuracy"),
+        ("addressee", "comfort_addressee_answer_accuracy"),
+    ):
+        rows = [row for row in samples if row.get("viewpoint") == viewpoint]
+        if rows:
+            values[metric_name] = sum(float(row.get("answer_accuracy", 0.0)) for row in rows) / len(rows)
+    return values
+
+
+def load_input(path: Path, task: str) -> tuple[dict[str, float], list[dict[str, Any]], bool]:
+    """Load either an LMMS result JSON or a sample-level submission JSON."""
+    payload = json.loads(path.read_text())
+    if isinstance(payload, list):
+        samples = [row for row in payload if isinstance(row, dict)]
+        return values_from_samples(samples), samples, True
+    results = load_results(path, task)
+    names = SUMMARY_METRICS + OUTCOME_METRICS
+    values = {
+        name: float(results[f"{name},none"])
+        for name in names
+        if isinstance(results.get(f"{name},none"), (int, float))
+    }
+    return values, [], False
+
+
 def metric(results: dict[str, Any], name: str) -> float:
     value = results.get(f"{name},none")
     if not isinstance(value, (int, float)):
@@ -98,6 +142,8 @@ def find_submission(input_path: Path, requested: Path | None) -> Path | None:
     """Find the sample-level submission written by the COMFORT aggregator."""
     if requested is not None:
         return requested
+    if input_path.parent.name == "submissions":
+        return input_path
     submission_dir = input_path.parent.parent / "submissions"
     candidates = sorted(submission_dir.glob("comfort_viewpoint_*.json"))
     return candidates[-1] if candidates else None
@@ -262,9 +308,10 @@ def annotate_bars(ax: Any, bars: Any) -> None:
 
 
 def plot_summary(values: dict[str, float], directory: Path) -> Path:
-    labels = [METRIC_LABELS[name] for name in SUMMARY_METRICS]
-    scores = [values[name] for name in SUMMARY_METRICS]
-    colors = ["#457B9D", "#8D99AE", "#3A86FF", "#2A9D8F", "#E9C46A", "#F4A261"]
+    names = [name for name in SUMMARY_METRICS if name in values]
+    labels = [METRIC_LABELS[name] for name in names]
+    scores = [values[name] for name in names]
+    colors = ["#457B9D", "#8D99AE", "#3A86FF", "#2A9D8F", "#E9C46A", "#F4A261"][:len(names)]
     fig, ax = plt.subplots(figsize=(11, 5.5))
     bars = ax.bar(labels, scores, color=colors)
     ax.set_ylim(0, 1)
@@ -316,12 +363,15 @@ def plot_outcomes(values: dict[str, float], directory: Path) -> list[Path]:
     return [bar_path, pie_path]
 
 
-def plot_question_types(values: dict[str, float], directory: Path) -> Path:
+def plot_question_types(values: dict[str, float], directory: Path) -> Path | None:
     names = [
         "comfort_camera_answer_accuracy",
         "comfort_reference_answer_accuracy",
         "comfort_addressee_answer_accuracy",
     ]
+    names = [name for name in names if name in values]
+    if not names:
+        return None
     labels = [METRIC_LABELS[name] for name in names]
     scores = [values[name] for name in names]
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -349,16 +399,20 @@ def infer(values: dict[str, float]) -> list[str]:
         notes.append("The dominant asymmetric error is correct answer with wrong direction, consistent with answer priors or shortcut reasoning.")
     if vector < 0.10:
         notes.append(f"Vector cosine is low ({vector:.3f}), indicating poor continuous geometric alignment.")
-    question_scores = {name: values[name] for name in (
-        "comfort_camera_answer_accuracy", "comfort_reference_answer_accuracy", "comfort_addressee_answer_accuracy")}
-    hardest = min(question_scores, key=question_scores.get)
-    notes.append(f"The weakest question type is {METRIC_LABELS[hardest].lower()} ({question_scores[hardest]:.3f}).")
+    question_scores = {
+        name: values[name]
+        for name in ("comfort_camera_answer_accuracy", "comfort_reference_answer_accuracy", "comfort_addressee_answer_accuracy")
+        if name in values
+    }
+    if question_scores:
+        hardest = min(question_scores, key=question_scores.get)
+        notes.append(f"The weakest question type is {METRIC_LABELS[hardest].lower()} ({question_scores[hardest]:.3f}).")
     return notes
 
 
 def write_report(values: dict[str, float], directory: Path, input_path: Path) -> Path:
     lines = ["# COMFORT Viewpoint Result Analysis", "", f"Input: `{input_path}`", "", "## Metrics", ""]
-    lines.extend(f"- `{name}`: `{values[name]:.6f}`" for name in SUMMARY_METRICS + OUTCOME_METRICS)
+    lines.extend(f"- `{name}`: `{values[name]:.6f}`" for name in SUMMARY_METRICS + OUTCOME_METRICS if name in values)
     lines.extend(["", "## Inferences", ""])
     lines.extend(f"- {note}" for note in infer(values))
     path = directory / "inference_report.md"
@@ -368,12 +422,10 @@ def write_report(values: dict[str, float], directory: Path, input_path: Path) ->
 
 def main() -> int:
     args = parse_args()
-    results = load_results(args.input, args.task)
-    names = SUMMARY_METRICS + OUTCOME_METRICS
-    values = {name: metric(results, name) for name in names}
+    values, embedded_samples, is_submission = load_input(args.input, args.task)
     directory = output_dir(args.input, args.output_dir)
-    samples_path = find_submission(args.input, args.samples)
-    samples = load_samples(samples_path)
+    samples_path = args.input if is_submission else find_submission(args.input, args.samples)
+    samples = embedded_samples if is_submission else load_samples(samples_path)
     outputs = [
         plot_summary(values, directory),
         *plot_outcomes(values, directory),
@@ -389,6 +441,8 @@ def main() -> int:
     outputs.append(write_report(values, directory, args.input))
     print("Generated analysis artifacts:")
     for path in outputs:
+        if path is None:
+            continue
         print(path)
     if samples_path is None:
         print("Sample-level submission not found; split-rectangle plots were skipped.")

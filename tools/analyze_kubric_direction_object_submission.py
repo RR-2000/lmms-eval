@@ -9,7 +9,8 @@ it does not rerun model inference or reconstruct the dataset.
 Example:
     python tools/analyze_kubric_direction_object_submission.py \
         outputs/kubric_movi_a_direction_object_extended_0/submissions/\
-kubric_movi_a_direction_object_extended_qwen3_vl_experiments.json
+kubric_movi_a_direction_object_extended_qwen3_vl_experiments.json \
+        --plot outputs/kubric_movi_a_direction_object_extended_0/kubric_paired_outcomes.png
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ VARIANTS = (
     "direction_natural_language",
     "object_direction_exhaustive",
 )
+RELATIONS = ("left", "right", "front", "behind")
+OUTCOME_KEYS = ("improved", "worsened", "unchanged_correct", "unchanged_incorrect")
 
 
 def _load_records(path: Path) -> list[dict[str, Any]]:
@@ -98,9 +101,42 @@ def _paired_outcomes(
     return outcomes
 
 
+def _format_paired_outcomes(
+    sources: dict[tuple[str, str], dict[str, dict[str, Any]]]
+) -> dict[str, int]:
+    """Compare the base object-answer and direction-answer prompts by format.
+
+    ``native`` and ``inverse`` swap answer formats between the single- and
+    multi-object source families, so choosing rows by ``answer_format`` is
+    less error-prone than assuming one fixed variant represents each format.
+    """
+    outcomes = {key: 0 for key in OUTCOME_KEYS}
+    for rows in sources.values():
+        direction = next(
+            (row for row in rows.values() if row.get("answer_format") == "direction"), None
+        )
+        object_answer = next(
+            (row for row in rows.values() if row.get("answer_format") == "object"), None
+        )
+        if direction is None or object_answer is None:
+            continue
+        direction_correct = _score(direction) == 1.0
+        object_correct = _score(object_answer) == 1.0
+        if object_correct and not direction_correct:
+            outcomes["improved"] += 1
+        elif direction_correct and not object_correct:
+            outcomes["worsened"] += 1
+        elif object_correct:
+            outcomes["unchanged_correct"] += 1
+        else:
+            outcomes["unchanged_incorrect"] += 1
+    outcomes["paired_count"] = sum(outcomes.values())
+    return outcomes
+
+
 def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    by_source: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    by_source: dict[tuple[str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     unknown_families: set[str] = set()
     unknown_variants: set[str] = set()
 
@@ -112,8 +148,10 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
         if variant not in VARIANTS:
             unknown_variants.add(variant)
         grouped[(family, variant)].append(row)
-        source_qid = str(row.get("source_qid", ""))
-        by_source[source_qid][variant] = row
+        # Include family in the key so copied/generated datasets with reused
+        # source ids cannot accidentally be paired across task families.
+        source_key = (family, str(row.get("source_qid", "")))
+        by_source[source_key][variant] = row
 
     by_family = {
         family: {variant: _summary(grouped[(family, variant)]) for variant in VARIANTS}
@@ -129,7 +167,7 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
         family_sources = {
             source: variants
             for source, variants in by_source.items()
-            if any(row.get("source_task_family") == family for row in variants.values())
+            if source[0] == family
         }
         paired[family] = {}
         paired_outcomes[family] = {}
@@ -159,12 +197,27 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
                 family_sources, left, right
             )
 
+    by_relation: dict[str, dict[tuple[str, str], dict[str, dict[str, Any]]]] = defaultdict(dict)
+    for source, variants in by_source.items():
+        relation = next((str(row.get("relation", "")) for row in variants.values()), "")
+        if relation:
+            by_relation[relation][source] = variants
+    format_paired_outcomes = {
+        "overall": _format_paired_outcomes(by_source),
+        **{
+            relation: _format_paired_outcomes(by_relation[relation])
+            for relation in RELATIONS
+            if relation in by_relation
+        },
+    }
+
     output: dict[str, Any] = {
         "records": len(records),
         "by_source_task_family": by_family,
         "by_variant": by_variant,
         "paired_gains": paired,
         "paired_outcomes": paired_outcomes,
+        "format_paired_outcomes_by_relation": format_paired_outcomes,
     }
     if unknown_families:
         output["unknown_source_task_families"] = sorted(unknown_families)
@@ -208,26 +261,29 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"({counts['paired_count']} pairs)"
             )
 
+    print("\nDirection-to-object paired outcomes by relation")
+    for relation, counts in report["format_paired_outcomes_by_relation"].items():
+        print(
+            f"  {relation}: improved={counts['improved']}, worsened={counts['worsened']}, "
+            f"unchanged-correct={counts['unchanged_correct']}, "
+            f"unchanged-incorrect={counts['unchanged_incorrect']} "
+            f"({counts['paired_count']} pairs)"
+        )
+
 
 def _save_paired_outcomes_plot(report: dict[str, Any], path: Path) -> None:
-    """Save a stacked count plot of paired correctness transitions."""
+    """Save a COMFORT-style stacked plot for object versus direction answers."""
     try:
         import matplotlib.pyplot as plt
     except ImportError as exc:
         raise RuntimeError("Plotting requires matplotlib; install it to use --plot.") from exc
 
-    labels = []
-    series = {key: [] for key in ("improved", "worsened", "unchanged_correct", "unchanged_incorrect")}
-    for family, comparisons in report["paired_outcomes"].items():
-        for comparison, counts in comparisons.items():
-            if not counts["paired_count"]:
-                continue
-            labels.append(f"{family.replace('object_centric_relative_position', 'single').replace('_multi', '-multi')}\n{comparison}")
-            for key in series:
-                series[key].append(counts[key])
+    paired_by_relation = report["format_paired_outcomes_by_relation"]
+    labels = ["overall", *(relation for relation in RELATIONS if relation in paired_by_relation)]
+    labels = [label for label in labels if paired_by_relation[label]["paired_count"]]
 
     if not labels:
-        raise ValueError("No complete paired comparisons were found for plotting.")
+        raise ValueError("No complete direction/object pairs were found for plotting.")
 
     colors = {
         "improved": "#2a9d8f",
@@ -236,18 +292,19 @@ def _save_paired_outcomes_plot(report: dict[str, Any], path: Path) -> None:
         "unchanged_incorrect": "#9aa0a6",
     }
     display = {
-        "improved": "Improved (wrong → correct)",
-        "worsened": "Worsened (correct → wrong)",
+        "improved": "Improved (direction wrong → object correct)",
+        "worsened": "Worsened (direction correct → object wrong)",
         "unchanged_correct": "Unchanged: correct",
         "unchanged_incorrect": "Unchanged: incorrect",
     }
-    figure, axis = plt.subplots(figsize=(max(9, len(labels) * 2.4), 6))
+    figure, axis = plt.subplots(figsize=(11, 6))
     bottom = [0] * len(labels)
-    for key in series:
-        axis.bar(labels, series[key], bottom=bottom, label=display[key], color=colors[key])
-        bottom = [current + value for current, value in zip(bottom, series[key])]
-    axis.set_ylabel("Number of paired prompts")
-    axis.set_title("Kubric direction/object prompt-variation outcomes")
+    for key in OUTCOME_KEYS:
+        values = [paired_by_relation[label][key] for label in labels]
+        axis.bar(labels, values, bottom=bottom, label=display[key], color=colors[key])
+        bottom = [current + value for current, value in zip(bottom, values)]
+    axis.set_ylabel("Number of matched source relations")
+    axis.set_title("Kubric MOVi-A direction/object paired outcomes")
     axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)

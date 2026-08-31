@@ -7,7 +7,7 @@ import os
 import random
 import re
 import string
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Optional
 
 import pandas as pd
@@ -789,7 +789,7 @@ def variants_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     )
 
     gt_help = doc.get("help", "")
-    question = doc.get("question", "")
+    question = doc.get("original_question", "")
     options = doc.get("options", "")
 
     assert question, "Question is missing in the variants document."
@@ -1361,6 +1361,306 @@ def direction_object_direct_answer_aggregate_results_for_submission(results, arg
     with open(path, "w") as file:
         json.dump(results, file, indent=2)
     eval_logger.info(f"3DSR direct-answer direction/object records saved to {path}.")
+
+
+# Generated viewpoint direction-versus-object diagnostic -----------------------
+#
+# ``viewpoint_direction_generated.jsonl`` is a pre-built, matched diagnostic.
+# Each pair has a native direction question and an inverse object question; this
+# task deliberately preserves its generated prompts/options rather than building
+# new distractors from the original 3DSRBench parquet data.
+GENERATED_VIEWPOINT_DIRECTION_OBJECT_FORMATS = {"direction", "object"}
+
+
+def _generated_viewpoint_pair_id(doc: dict) -> str:
+    """Return the generated relation ID shared by native/inverse rows."""
+    qid = str(doc.get("qid", doc.get("index", "")))
+    for suffix in ("::native", "::inverse"):
+        if qid.endswith(suffix):
+            return qid[: -len(suffix)]
+    source_qid = str(doc.get("source_qid", ""))
+    direction = str(doc.get("diagnostic_direction", ""))
+    return f"{source_qid}::{direction}"
+
+
+def _generated_viewpoint_options(doc: dict) -> list[str]:
+    return [
+        str(doc[letter]).strip()
+        for letter in "ABCD"
+        if doc.get(letter) is not None
+    ]
+
+
+def generated_viewpoint_direction_object_process_docs(dataset):
+    """Validate the final generated JSONL while retaining its native rows.
+
+    The final dataset may be larger than the checked-in sample, but must retain
+    the sample's pair schema: one native direction row and one inverse object
+    row per generated relation, with two-to-four lettered options per row.
+    """
+    docs = list(dataset)
+    errors = []
+    groups = defaultdict(dict)
+    for doc in docs:
+        pair_id = _generated_viewpoint_pair_id(doc)
+        variant = str(doc.get("diagnostic_variant", ""))
+        answer_format = str(doc.get("diagnostic_answer_format", ""))
+        options = _generated_viewpoint_options(doc)
+        answer = str(doc.get("answer", "")).strip().upper()
+        expected_count = doc.get("generated_option_count")
+        image_path = str(
+            doc.get("resolved_img_path")
+            or doc.get("img_path")
+            or doc.get("source_image_path")
+            or ""
+        )
+
+        if not pair_id or variant not in {"native", "inverse"}:
+            errors.append(f"{doc.get('qid', '<unknown>')}: invalid pair ID or variant")
+            continue
+        expected_format = "direction" if variant == "native" else "object"
+        if answer_format != expected_format:
+            errors.append(
+                f"{doc.get('qid', '<unknown>')}: expected {expected_format} answer format"
+            )
+        if answer_format not in GENERATED_VIEWPOINT_DIRECTION_OBJECT_FORMATS:
+            errors.append(f"{doc.get('qid', '<unknown>')}: unsupported answer format")
+        if not 2 <= len(options) <= 4 or len(set(options)) != len(options):
+            errors.append(f"{doc.get('qid', '<unknown>')}: invalid options {options!r}")
+        if expected_count is not None and int(expected_count) != len(options):
+            errors.append(f"{doc.get('qid', '<unknown>')}: option-count metadata mismatch")
+        if answer not in "ABCD"[: len(options)]:
+            errors.append(f"{doc.get('qid', '<unknown>')}: answer {answer!r} is not displayed")
+        if not image_path or not Path(image_path).is_file():
+            errors.append(f"{doc.get('qid', '<unknown>')}: missing local image {image_path!r}")
+        if variant in groups[pair_id]:
+            errors.append(f"{doc.get('qid', '<unknown>')}: duplicate {variant} row")
+        groups[pair_id][variant] = doc
+
+    for pair_id, pair in groups.items():
+        if set(pair) != {"native", "inverse"}:
+            errors.append(f"{pair_id}: incomplete native/inverse pair")
+            continue
+        native, inverse = pair["native"], pair["inverse"]
+        shared_fields = (
+            "source_qid",
+            "subject",
+            "diagnostic_direction",
+            "diagnostic_target_object",
+        )
+        for field in shared_fields:
+            if native.get(field) != inverse.get(field):
+                errors.append(f"{pair_id}: {field} differs across the pair")
+        native_image = native.get("resolved_img_path") or native.get("img_path")
+        inverse_image = inverse.get("resolved_img_path") or inverse.get("img_path")
+        if native_image != inverse_image:
+            errors.append(f"{pair_id}: image path differs across the pair")
+
+    if errors:
+        preview = "\n  ".join(errors[:10])
+        raise ValueError(
+            f"Invalid generated viewpoint direction/object data ({len(errors)} error(s)):\n  {preview}"
+        )
+    eval_logger.info(
+        "Generated 3DSR viewpoint direction/object task loaded {} matched pairs ({} rows).",
+        len(groups),
+        len(docs),
+    )
+    return dataset
+
+
+def generated_viewpoint_direction_object_doc_to_text(doc, lmms_eval_specific_kwargs=None):
+    kwargs = lmms_eval_specific_kwargs or {}
+    options = _generated_viewpoint_options(doc)
+    option_lines = "\n".join(
+        f"{letter}. {option}" for letter, option in zip("ABCD", options)
+    )
+    question = str(doc.get("original_question") or doc.get("question") or "").strip()
+    return (
+        f"{kwargs.get('pre_prompt', '')}Answer this spatial-reasoning question using the image. "
+        "Select one answer option and respond with its letter.\n"
+        f"Question: {question}\nOptions:\n{option_lines}"
+        f"{kwargs.get('post_prompt', '')}"
+    )
+
+
+def generated_viewpoint_direction_object_doc_to_target(doc):
+    return str(doc.get("answer", "")).strip().upper()
+
+
+def generated_viewpoint_direction_object_process_results(doc, results):
+    prediction = results[0].strip() if results else ""
+    parsed = extract_answer(prediction)
+    gold = generated_viewpoint_direction_object_doc_to_target(doc)
+    entry = {
+        "qid": doc.get("qid"),
+        "source_qid": doc.get("source_qid"),
+        "source_relation_id": _generated_viewpoint_pair_id(doc),
+        "variant": doc.get("diagnostic_variant"),
+        "answer_format": doc.get("diagnostic_answer_format"),
+        "image_name": doc.get("image_name"),
+        "subject": doc.get("subject"),
+        "target": doc.get("diagnostic_target_object"),
+        "direction": doc.get("diagnostic_direction"),
+        "num_options": len(_generated_viewpoint_options(doc)),
+        "gold_option_letter": gold,
+        "predicted_option_letter": parsed,
+        "parse_success": parsed is not None,
+        "score": float(parsed == gold),
+        "prediction": prediction,
+    }
+    metric_names = (
+        "accuracy",
+        "object_answer_accuracy",
+        "direction_answer_accuracy",
+        "object_minus_direction",
+        "format_switch_gain",
+        "parse_success_rate",
+        "object_parse_success_rate",
+        "direction_parse_success_rate",
+        "object_correct_direction_wrong",
+        "direction_correct_object_wrong",
+        "both_correct",
+        "both_wrong",
+    )
+    output = {name: dict(entry) for name in metric_names}
+    output["submission"] = {
+        **entry,
+        "question_prompt": generated_viewpoint_direction_object_doc_to_text(doc),
+        "img_path": doc.get("resolved_img_path") or doc.get("img_path"),
+        "image_path": doc.get("resolved_img_path") or doc.get("img_path"),
+        "options": _generated_viewpoint_options(doc),
+        "gold_answer": doc.get("diagnostic_target"),
+    }
+    return output
+
+
+def _generated_viewpoint_direction_object_mean(values):
+    values = list(values)
+    return sum(values) / len(values) if values else 0.0
+
+
+def _generated_viewpoint_direction_object_pairs(results):
+    pairs = defaultdict(dict)
+    for result in results:
+        pair_id = result.get("source_relation_id")
+        answer_format = result.get("answer_format")
+        if pair_id and answer_format in GENERATED_VIEWPOINT_DIRECTION_OBJECT_FORMATS:
+            pairs[pair_id][answer_format] = result
+    return [
+        pair
+        for pair in pairs.values()
+        if set(pair) == GENERATED_VIEWPOINT_DIRECTION_OBJECT_FORMATS
+    ]
+
+
+def generated_viewpoint_direction_object_aggregate_accuracy(results):
+    eval_logger.info(
+        "Generated 3DSR viewpoint direction/object: {} complete pairs out of {} source relations.",
+        len(_generated_viewpoint_direction_object_pairs(results)),
+        len({result.get("source_relation_id") for result in results}),
+    )
+    return _generated_viewpoint_direction_object_mean(
+        result["score"] for result in results
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_object_answer_accuracy(results):
+    return _generated_viewpoint_direction_object_mean(
+        result["score"]
+        for result in results
+        if result.get("answer_format") == "object"
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_direction_answer_accuracy(results):
+    return _generated_viewpoint_direction_object_mean(
+        result["score"]
+        for result in results
+        if result.get("answer_format") == "direction"
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_parse_success_rate(results):
+    return _generated_viewpoint_direction_object_mean(
+        float(result["parse_success"]) for result in results
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_object_parse_success_rate(results):
+    return _generated_viewpoint_direction_object_mean(
+        float(result["parse_success"])
+        for result in results
+        if result.get("answer_format") == "object"
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_direction_parse_success_rate(results):
+    return _generated_viewpoint_direction_object_mean(
+        float(result["parse_success"])
+        for result in results
+        if result.get("answer_format") == "direction"
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_object_minus_direction(results):
+    return _generated_viewpoint_direction_object_mean(
+        pair["object"]["score"] - pair["direction"]["score"]
+        for pair in _generated_viewpoint_direction_object_pairs(results)
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_format_switch_gain(results):
+    return generated_viewpoint_direction_object_aggregate_object_minus_direction(results)
+
+
+def _generated_viewpoint_direction_object_paired_outcome(
+    results, object_score: float, direction_score: float
+):
+    return _generated_viewpoint_direction_object_mean(
+        float(
+            pair["object"]["score"] == object_score
+            and pair["direction"]["score"] == direction_score
+        )
+        for pair in _generated_viewpoint_direction_object_pairs(results)
+    )
+
+
+def generated_viewpoint_direction_object_aggregate_object_correct_direction_wrong(results):
+    return _generated_viewpoint_direction_object_paired_outcome(results, 1.0, 0.0)
+
+
+def generated_viewpoint_direction_object_aggregate_direction_correct_object_wrong(results):
+    return _generated_viewpoint_direction_object_paired_outcome(results, 0.0, 1.0)
+
+
+def generated_viewpoint_direction_object_aggregate_both_correct(results):
+    return _generated_viewpoint_direction_object_paired_outcome(results, 1.0, 1.0)
+
+
+def generated_viewpoint_direction_object_aggregate_both_wrong(results):
+    return _generated_viewpoint_direction_object_paired_outcome(results, 0.0, 0.0)
+
+
+def generated_viewpoint_direction_object_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"3dsrbench_generated_viewpoint_direction_object_{_get_submission_model_tag(args)}.json",
+        args,
+    )
+    report = {
+        "num_records": len(results),
+        "num_matched_pairs": len(_generated_viewpoint_direction_object_pairs(results)),
+        "prediction_distribution": dict(
+            Counter(
+                result.get("predicted_option_letter") or "parse_failure"
+                for result in results
+            )
+        ),
+        "records": results,
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2)
+    eval_logger.info("Generated 3DSR viewpoint direction/object records saved to {}.", path)
 
 
 # Multi-family direction-versus-object diagnostic -----------------------------

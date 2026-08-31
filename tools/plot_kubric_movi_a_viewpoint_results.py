@@ -166,7 +166,7 @@ def parse_args() -> argparse.Namespace:
         "--input",
         type=Path,
         default=DEFAULT_INPUT,
-        help="Path to an LMMS result JSON.",
+        help="Path to an LMMS result JSON or a per-example submission JSON.",
     )
     parser.add_argument(
         "--task",
@@ -199,6 +199,73 @@ def load_task_results(path: Path, task_name: str) -> dict[str, Any]:
     return results
 
 
+def _mean_records(records: list[dict[str, Any]], field: str, available: str | None = None) -> float:
+    rows = records if available is None else [row for row in records if float(row.get(available, 0.0)) > 0.0]
+    return sum(float(row.get(field, 0.0)) for row in rows) / len(rows) if rows else 0.0
+
+
+def _submission_metric(records: list[dict[str, Any]], name: str) -> float:
+    """Reconstruct a result metric from LMMS-eval's per-example submission rows."""
+    overall_fields = {
+        "viewpoint_answer_accuracy": "answer_accuracy",
+        "viewpoint_axis_sign_accuracy": "axis_sign_accuracy",
+        "viewpoint_answer_and_direction_correct": "answer_and_direction_correct",
+        "viewpoint_answer_correct_direction_wrong": "answer_correct_direction_wrong",
+        "viewpoint_answer_wrong_direction_correct": "answer_wrong_direction_correct",
+        "viewpoint_answer_and_direction_wrong": "answer_and_direction_wrong",
+        "viewpoint_vector_cosine": "vector_cosine",
+        "viewpoint_scale_score": "scale_score",
+        "viewpoint_combined_score": "combined_score",
+    }
+    if name in overall_fields:
+        return _mean_records(records, overall_fields[name])
+    if name == "viewpoint_reference_to_camera_cosine":
+        return _mean_records(records, "camera_direction_cosine", "camera_direction_available")
+    if name == "viewpoint_reference_to_camera_distance_score":
+        return _mean_records(records, "camera_distance_score", "camera_distance_available")
+
+    family = next((item for item in sorted(FAMILIES, key=len, reverse=True) if name.startswith(f"{item}_")), None)
+    if family is None:
+        return 0.0
+    rows = [row for row in records if row.get("task_family") == family]
+    suffix = name[len(family) + 1 :]
+    if suffix.startswith("viewpoint_"):
+        return _mean_records(rows, suffix.removeprefix("viewpoint_"))
+    if suffix == "camera_direction_cosine":
+        return _mean_records(rows, "camera_direction_cosine", "camera_direction_available")
+    if suffix == "camera_distance_score":
+        return _mean_records(rows, "camera_distance_score", "camera_distance_available")
+    if suffix in {"camera_right_sign_accuracy", "camera_up_sign_accuracy", "camera_full_sign_accuracy"}:
+        return _mean_records(rows, suffix, "camera_sign_metric_available")
+    if suffix == "camera_front_sign_accuracy":
+        field = "object_centric_camera_front_sign_accuracy" if family.startswith("object_centric_relative_position") else suffix
+        available = "object_centric_metric_available" if field.startswith("object_centric_") else "camera_sign_metric_available"
+        return _mean_records(rows, field, available)
+    if suffix == "camera_vector_nonzero":
+        return _mean_records(rows, "object_centric_camera_vector_nonzero", "object_centric_metric_available")
+    if suffix in {"right_sign_accuracy", "front_sign_accuracy", "full_sign_accuracy"}:
+        return _mean_records(rows, f"object_centric_{suffix}", "object_centric_metric_available")
+    if suffix in {"candidate_aware_direction_accuracy", "direction_given_predicted_object_accuracy", "ranking_accuracy_on_relation_axis", "ranking_score_on_relation_axis", "predicted_target_in_candidate_set"}:
+        return _mean_records(rows, suffix, "multi_object_metric_available")
+    return 0.0
+
+
+def submission_to_results(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the result-summary shape consumed by the existing plotting code."""
+    names = {
+        "viewpoint_answer_accuracy", "viewpoint_axis_sign_accuracy", "viewpoint_reference_to_camera_cosine",
+        "viewpoint_reference_to_camera_distance_score", "viewpoint_vector_cosine", "viewpoint_scale_score",
+        "viewpoint_combined_score", *[f"viewpoint_{case}" for case in CASE_METRICS],
+        *GEOMETRY_METRICS, *OBJECT_CENTRIC_SINGLE_METRICS, *OBJECT_CENTRIC_MULTI_METRICS,
+        *OBJECT_CENTRIC_BINARY_METRICS, *OBJECT_CENTRIC_CAMERA_POSE_METRICS,
+    }
+    present_families = {str(row.get("task_family")) for row in records}
+    for family in present_families:
+        if family in FAMILIES:
+            names.update(f"{family}_viewpoint_{case}" for case in CASE_METRICS)
+    return {f"{name},none": _submission_metric(records, name) for name in names}
+
+
 def metric_value(results: dict[str, Any], metric_name: str) -> float | None:
     value = results.get(f"{metric_name},none")
     return float(value) if isinstance(value, (int, float)) else None
@@ -228,9 +295,9 @@ def overall_metrics(results: dict[str, Any]) -> dict[str, float]:
 def family_case_metrics(results: dict[str, Any]) -> dict[str, dict[str, float]]:
     family_cases: dict[str, dict[str, float]] = {}
     for family in FAMILIES:
-        family_cases[family] = {
-            case: family_metric_value(results, family, case) or 0.0 for case in CASE_METRICS
-        }
+        values = {case: family_metric_value(results, family, case) for case in CASE_METRICS}
+        if any(value is not None for value in values.values()):
+            family_cases[family] = {case: value or 0.0 for case, value in values.items()}
     return family_cases
 
 
@@ -240,6 +307,8 @@ def find_submission_input(result_path: Path, submission_input: Path | None) -> P
         if not submission_input.is_file():
             raise FileNotFoundError(f"Submission input not found: {submission_input}")
         return submission_input
+    if result_path.parent.name == "submissions":
+        return result_path
 
     # Result paths are normally ``<run>/<model>/<timestamp>_results.json``.
     run_dir = result_path.parent.parent
@@ -551,14 +620,15 @@ def plot_overall_case_pie(metrics: dict[str, float], output_dir: Path) -> Path:
 
 
 def plot_family_case_pies(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
-    num_families = len(FAMILIES)
+    families = list(family_cases)
+    num_families = len(families)
     cols = 3
     rows = (num_families + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(14, 4.5 * rows))
     axes = axes.flatten()
     colors = [CASE_COLORS[case] for case in CASE_METRICS]
 
-    for ax, family in zip(axes, FAMILIES):
+    for ax, family in zip(axes, families):
         values = [family_cases[family][case] for case in CASE_METRICS]
         labels = [CASE_LABELS[case] for case in CASE_METRICS]
         ax.pie(
@@ -573,7 +643,7 @@ def plot_family_case_pies(family_cases: dict[str, dict[str, float]], output_dir:
         )
         ax.set_title(FAMILY_DISPLAY[family], fontsize=11)
 
-    for ax in axes[len(FAMILIES) :]:
+    for ax in axes[len(families) :]:
         ax.axis("off")
 
     fig.suptitle("Per-Family Outcome Pie Charts", fontsize=14, y=0.98)
@@ -948,38 +1018,36 @@ def infer_metrics(metrics: dict[str, float], family_cases: dict[str, dict[str, f
             f"Reference-to-camera cosine is effectively zero ({ref_cam:.3f}); in practice this usually means the model is not emitting a meaningful `camera_vector` field yet."
         )
 
-    object_single = family_cases["object_centric_relative_position"]
-    object_multi = family_cases["object_centric_relative_position_multi"]
-    camera_rel = family_cases["camera_relative_position"]
-    camera_dist = family_cases["camera_distance"]
-    height = family_cases["height_relative_3d"]
+    object_single = family_cases.get("object_centric_relative_position")
+    object_multi = family_cases.get("object_centric_relative_position_multi")
+    camera_rel = family_cases.get("camera_relative_position")
+    camera_dist = family_cases.get("camera_distance")
+    height = family_cases.get("height_relative_3d")
 
-    if object_single["answer_and_direction_wrong"] > 0.50:
+    if object_single and object_single["answer_and_direction_wrong"] > 0.50:
         notes.append(
             f"Single-target object-centric reasoning is the clearest bottleneck: `both wrong` is {object_single['answer_and_direction_wrong']:.3f}, which suggests difficulty transforming into the anchor-centered, camera-facing frame."
         )
 
-    if object_multi["answer_wrong_direction_correct"] > 0.25:
+    if object_multi and object_multi["answer_wrong_direction_correct"] > 0.25:
         notes.append(
             f"Multi-target object-centric reasoning shows a different error mode: `answer wrong, direction correct` is {object_multi['answer_wrong_direction_correct']:.3f}, suggesting the model often gets the side/front-behind geometry roughly right but fails candidate selection."
         )
 
-    if camera_rel["answer_correct_direction_wrong"] > 0.45:
+    if camera_rel and camera_rel["answer_correct_direction_wrong"] > 0.45:
         notes.append(
             f"Camera-relative position has a strong `answer correct, direction wrong` pattern ({camera_rel['answer_correct_direction_wrong']:.3f}); object identification appears easier than producing a faithful signed vector."
         )
 
-    if camera_dist["answer_and_direction_correct"] >= max(
-        camera_rel["answer_and_direction_correct"],
-        height["answer_and_direction_correct"],
-        object_single["answer_and_direction_correct"],
-        object_multi["answer_and_direction_correct"],
+    comparison_families = [item for item in (camera_rel, height, object_single, object_multi) if item]
+    if camera_dist and comparison_families and camera_dist["answer_and_direction_correct"] >= max(
+        item["answer_and_direction_correct"] for item in comparison_families
     ):
         notes.append(
             f"Camera-distance is the strongest family on joint correctness ({camera_dist['answer_and_direction_correct']:.3f}), implying depth-order judgments are currently easier for the model than anchor-centric viewpoint reasoning."
         )
 
-    if height["answer_correct_direction_wrong"] > height["answer_and_direction_correct"]:
+    if height and height["answer_correct_direction_wrong"] > height["answer_and_direction_correct"]:
         notes.append(
             f"Height-relative 3D questions still show more `answer correct, direction wrong` ({height['answer_correct_direction_wrong']:.3f}) than full success ({height['answer_and_direction_correct']:.3f}), so the model often knows which object to pick without producing a consistent signed `up` value."
         )
@@ -1091,7 +1159,12 @@ def write_inference_report(
 
 def main() -> int:
     args = parse_args()
-    results = load_task_results(args.input, args.task)
+    payload = json.loads(args.input.read_text())
+    is_submission_input = isinstance(payload, list)
+    submission_records = (
+        [record for record in payload if isinstance(record, dict)] if is_submission_input else []
+    )
+    results = submission_to_results(submission_records) if is_submission_input else load_task_results(args.input, args.task)
     metrics = overall_metrics(results)
     geometry_metrics = named_metrics(results, GEOMETRY_METRICS)
     family_cases = family_case_metrics(results)
@@ -1128,10 +1201,10 @@ def main() -> int:
             output_dir / "object_centric_camera_pose_metrics.png",
         ),
     ]
-    submission_input = find_submission_input(args.input, args.submission_input)
+    submission_input = args.input if is_submission_input else find_submission_input(args.input, args.submission_input)
     if submission_input is not None:
         invalid_direction_cases = family_case_metrics_with_invalid_direction(
-            load_submission_records(submission_input)
+            submission_records if is_submission_input else load_submission_records(submission_input)
         )
         if invalid_direction_cases:
             outputs.append(

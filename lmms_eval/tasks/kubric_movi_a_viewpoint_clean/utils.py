@@ -611,6 +611,86 @@ def _compute_anchor_local_vector(doc, anchor_name: str, target_name: str) -> Opt
     return _camera_frame_vector_from_world(doc, relative)
 
 
+def _compute_anchor_facing_vector(doc, anchor_name: str, target_name: str) -> Optional[dict[str, float]]:
+    """Express target-minus-anchor in the frame of an anchor facing the camera.
+
+    The horizontal forward axis points from the anchor to the camera.  This is
+    deliberately distinct from the camera frame: an object facing the camera
+    has its right direction opposite the camera's screen-right direction.
+    """
+    anchor_obj = _get_object_record(doc, anchor_name)
+    target_obj = _get_object_record(doc, target_name)
+    camera_position = _get_camera_position(doc)
+    if not anchor_obj or not target_obj or not camera_position:
+        return None
+    anchor_position = anchor_obj.get("position_3d")
+    target_position = target_obj.get("position_3d")
+    if not anchor_position or not target_position or len(anchor_position) != 3 or len(target_position) != 3:
+        return None
+
+    # Ground-plane forward from the anchor toward the camera.
+    forward = _vector_sub(camera_position, anchor_position)
+    forward[2] = 0.0
+    forward = _vector_normalize(forward)
+    if forward is None:
+        return None
+    up = [0.0, 0.0, 1.0]
+    # right = forward x up is the anchor's own right while facing the camera.
+    right = _vector_normalize(_vector_cross(forward, up))
+    if right is None:
+        return None
+
+    relative = _vector_sub(target_position, anchor_position)
+    return {
+        "right": _vector_dot(relative, right),
+        "up": _vector_dot(relative, up),
+        "front": _vector_dot(relative, forward),
+    }
+
+
+def _anchor_to_camera_facing_vector(doc, anchor_name: str) -> tuple[Optional[dict[str, float]], Optional[float]]:
+    anchor_obj = _get_object_record(doc, anchor_name)
+    camera_position = _get_camera_position(doc)
+    if not anchor_obj or not camera_position:
+        return None, None
+    anchor_position = anchor_obj.get("position_3d")
+    if not anchor_position or len(anchor_position) != 3:
+        return None, None
+    displacement = _vector_sub(camera_position, anchor_position)
+    distance = _vector_norm(displacement)
+    horizontal_distance = math.hypot(displacement[0], displacement[1])
+    if distance <= 1e-8 or horizontal_distance <= 1e-8:
+        return None, None
+    # In the anchor-facing frame the camera is straight ahead by construction.
+    return {
+        "right": 0.0,
+        "up": float(displacement[2]),
+        "front": float(horizontal_distance),
+    }, distance
+
+
+def process_object_centric_looking_back_docs(dataset):
+    """Keep object-centric records and mark their vector coordinate system.
+
+    This lets the new task coexist with the camera-frame viewpoint tasks that
+    use the same source parquet file.
+    """
+    families = {
+        "object_centric_relative_position",
+        "object_centric_relative_position_multi",
+        "object_centric_direction_binary",
+        "object_centric_camera_pose",
+    }
+    filtered = dataset.filter(lambda doc: doc.get("task_family") in families)
+    return filtered.map(
+        lambda doc: {
+            **doc,
+            "vector_frame": "anchor_facing_camera",
+            "object_pov": "anchor_looking_back_at_camera",
+        }
+    )
+
+
 def _pair_answer_from_relation(relation: str, reference_name: str, target_name: str, axis_value: float, fallback: str) -> str:
     axis_sign = _sign(axis_value)
     if axis_sign == 0:
@@ -667,7 +747,11 @@ def _multi_object_candidate_axis_values(doc) -> Optional[dict[str, float]]:
 
     axis_values: dict[str, float] = {}
     for candidate in candidates:
-        local_vector = _compute_anchor_local_vector(doc, anchor_name, candidate)
+        local_vector = (
+            _compute_anchor_facing_vector(doc, anchor_name, candidate)
+            if doc.get("vector_frame") == "anchor_facing_camera"
+            else _compute_anchor_local_vector(doc, anchor_name, candidate)
+        )
         if not local_vector:
             continue
         axis_values[_normalize_name(candidate)] = float(local_vector[axis])
@@ -876,8 +960,12 @@ def _get_gt_spec(doc) -> dict:
         spec["reference_object"] = anchor_name
         spec["target_object"] = target_name
         spec["scale_ratio"] = _scale_ratio(_get_object_record(doc, anchor_name), _get_object_record(doc, target_name))
-        spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
-        local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+        if doc.get("vector_frame") == "anchor_facing_camera":
+            spec["camera_vector"], spec["camera_distance"] = _anchor_to_camera_facing_vector(doc, anchor_name)
+            local_vector = _compute_anchor_facing_vector(doc, anchor_name, target_name)
+        else:
+            spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
+            local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
         if local_vector:
             spec["vector"] = local_vector
             # spec["answer"] = _dominant_horizontal_relation(local_vector, gt_answer)
@@ -900,8 +988,12 @@ def _get_gt_spec(doc) -> dict:
         spec["target_object"] = target_name
         spec["answer"] = target_name
         spec["scale_ratio"] = _scale_ratio(_get_object_record(doc, anchor_name), _get_object_record(doc, target_name))
-        spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
-        local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+        if doc.get("vector_frame") == "anchor_facing_camera":
+            spec["camera_vector"], spec["camera_distance"] = _anchor_to_camera_facing_vector(doc, anchor_name)
+            local_vector = _compute_anchor_facing_vector(doc, anchor_name, target_name)
+        else:
+            spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
+            local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
         if local_vector:
             spec["vector"] = local_vector
 
@@ -918,13 +1010,21 @@ def _get_gt_spec(doc) -> dict:
             _get_object_record(doc, anchor_name),
             _get_object_record(doc, target_name),
         )
-        spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
-        local_vector = _compute_anchor_local_vector(doc, anchor_name, target_name)
+        if doc.get("vector_frame") == "anchor_facing_camera":
+            spec["camera_vector"], spec["camera_distance"] = _anchor_to_camera_facing_vector(doc, anchor_name)
+        else:
+            spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
+        local_vector = (
+            _compute_anchor_facing_vector(doc, anchor_name, target_name)
+            if doc.get("vector_frame") == "anchor_facing_camera"
+            else _compute_anchor_local_vector(doc, anchor_name, target_name)
+        )
 
         # Flip the L/R and F/B relations to be from the anchor object's perspective, looking back at the camera.
         local_vector_rel = local_vector.copy() if local_vector else {"right": 0.0, "up": 0.0, "front": 0.0}
-        local_vector_rel["right"] *= -1.0
-        local_vector_rel["front"] *= -1.0
+        if doc.get("vector_frame") != "anchor_facing_camera":
+            local_vector_rel["right"] *= -1.0
+            local_vector_rel["front"] *= -1.0
 
         if local_vector:
             spec["vector"] = local_vector
@@ -940,7 +1040,10 @@ def _get_gt_spec(doc) -> dict:
         anchor_name = metadata.get("anchor_object", "")
         spec["reference_object"] = anchor_name
         spec["target_object"] = ""
-        spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
+        if doc.get("vector_frame") == "anchor_facing_camera":
+            spec["camera_vector"], spec["camera_distance"] = _anchor_to_camera_facing_vector(doc, anchor_name)
+        else:
+            spec["camera_vector"], spec["camera_distance"] = _camera_world_vector_from_anchor(doc, anchor_name)
         if spec["camera_vector"] is not None:
             spec["vector"] = dict(spec["camera_vector"])
             spec["answer"] = _dominant_horizontal_relation(spec["camera_vector"], gt_answer)
@@ -975,6 +1078,15 @@ def _build_task_instructions(doc) -> str:
         "- 'camera_distance' is the Euclidean distance from the anchor object center to the camera",
         "- Following are the rules for this particular task:",
     ]
+
+    if doc.get("vector_frame") == "anchor_facing_camera":
+        lines.extend(
+            [
+                "For this task, `relative_vector` and `camera_vector` instead use the anchor-facing frame.",
+                "The anchor is facing the camera: `front` points from the anchor toward the camera, `right` is the anchor's own right, and `up` is world up.",
+                "Thus the camera has positive `front`, and a target with positive `right` is on the anchor's right while it looks at the camera.",
+            ]
+        )
 
     if task_family == "camera_relative_position":
         lines.extend(

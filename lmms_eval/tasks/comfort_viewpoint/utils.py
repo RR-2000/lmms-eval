@@ -18,6 +18,26 @@ RELATION_AXIS = {"left": "right", "right": "right", "front": "front", "behind": 
 RELATION_SIGN = {"left": -1, "right": 1, "front": 1, "behind": -1}
 
 
+def process_reference_and_addressee_orientation_docs(dataset):
+    """Retain directions expressed in the reference or addressee GT frame.
+
+    For these source records, ``vector_between_objects`` is already the
+    variable-minus-reference displacement rotated using the current observer
+    asset's ground-truth pose (rather than a camera-facing convention).  The
+    matching scene ``config.json`` contains the original object positions and
+    rotations used to render the record.
+    """
+    observer_docs = dataset.filter(
+        lambda doc: doc.get("viewpoint") in {"reference", "addressee"}
+    )
+    return observer_docs.map(
+        lambda doc: {
+            **doc,
+            "vector_frame": "observer_ground_truth_orientation",
+        }
+    )
+
+
 def doc_to_visual(doc):
     path = Path(str(doc.get("img_path") or doc.get("image") or ""))
     if not path.is_file():
@@ -32,6 +52,13 @@ def _vector(doc) -> dict[str, float]:
 
 
 def _coordinate_text(doc) -> str:
+    if doc.get("vector_frame") == "observer_ground_truth_orientation":
+        reference = doc.get("reference_object") or {}
+        observer = reference if doc.get("viewpoint") == "reference" else (doc.get("addressee_object") or {})
+        return (
+            f"The coordinate-system origin is the {reference.get('name', 'reference object')} center. "
+            f"Its axes are the {observer.get('name', 'observer')}'s ground-truth right, front-facing, and up directions."
+        )
     system = doc.get("coordinate_system") or {}
     Origin = system.get("origin")
     right = system.get("right")
@@ -48,12 +75,20 @@ def _coordinate_text(doc) -> str:
 
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
     del lmms_eval_specific_kwargs
+    observer = (doc.get("reference_object") or {}) if doc.get("viewpoint") == "reference" else (doc.get("addressee_object") or {})
+    vector_instruction = (
+        "Return a `between_objects` vector, it must be variable-object position minus reference-object position "
+        f"expressed in {observer.get('name', 'the observer')}'s ground-truth orientation frame. "
+        "Use the observer's own right, front (facing), and up axes; do not orient it toward the camera."
+        if doc.get("vector_frame") == "observer_ground_truth_orientation"
+        else "Return a `between_objects` vector, it must be variable-object position minus reference-object position in the camera frame."
+    )
     return "\n".join(
         [
             str(doc["question"]),
             _coordinate_text(doc),
             "Return only valid JSON.",
-            "Return a `between_objects` vector, it must be variable-object position minus reference-object position in the camera frame.",
+            vector_instruction,
             "The `between_objects` field is mandatory and is heavily evaluated. Never omit it and never use [0, 0, 0] unless the two objects are exactly coincident.",
             'JSON schema: {"answer":"<left|right|front|behind>","between_objects":{"right":<float>,"front":<float>,"up":<float>}}',
         ]

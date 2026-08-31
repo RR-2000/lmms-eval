@@ -24,6 +24,7 @@ from typing import Any
 
 VARIANTS = ("native", "inverse")
 OUTCOME_KEYS = ("improved", "worsened", "unchanged_correct", "unchanged_incorrect")
+RELATIONS = ("left", "right", "front", "behind")
 
 
 def _load_records(path: Path) -> list[dict[str, Any]]:
@@ -56,6 +57,26 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _paired_outcomes(by_source: dict[str, dict[str, dict[str, Any]]]) -> dict[str, int]:
+    """Count the effect of replacing a direction answer with an object answer."""
+    outcomes = {key: 0 for key in OUTCOME_KEYS}
+    for variants in by_source.values():
+        if not {"native", "inverse"} <= variants.keys():
+            continue
+        direction_correct = _score(variants["native"]) == 1.0
+        object_correct = _score(variants["inverse"]) == 1.0
+        if object_correct and not direction_correct:
+            outcomes["improved"] += 1
+        elif direction_correct and not object_correct:
+            outcomes["worsened"] += 1
+        elif object_correct:
+            outcomes["unchanged_correct"] += 1
+        else:
+            outcomes["unchanged_incorrect"] += 1
+    outcomes["paired_count"] = sum(outcomes.values())
+    return outcomes
+
+
 def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_source: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
@@ -67,21 +88,20 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
         grouped[variant].append(row)
         by_source[str(row.get("source_qid", ""))][variant] = row
 
-    outcomes = {key: 0 for key in OUTCOME_KEYS}
-    for variants in by_source.values():
-        if not {"native", "inverse"} <= variants.keys():
-            continue
-        native_correct = _score(variants["native"]) == 1.0
-        inverse_correct = _score(variants["inverse"]) == 1.0
-        if inverse_correct and not native_correct:
-            outcomes["improved"] += 1
-        elif native_correct and not inverse_correct:
-            outcomes["worsened"] += 1
-        elif inverse_correct:
-            outcomes["unchanged_correct"] += 1
-        else:
-            outcomes["unchanged_incorrect"] += 1
-    outcomes["paired_count"] = sum(outcomes.values())
+    outcomes = _paired_outcomes(by_source)
+    by_direction: dict[str, dict[str, dict[str, dict[str, Any]]]] = defaultdict(dict)
+    for source_qid, variants in by_source.items():
+        direction = next((str(row.get("direction", "")) for row in variants.values()), "")
+        if direction:
+            by_direction[direction][source_qid] = variants
+    paired_outcomes_by_direction = {
+        "overall": outcomes,
+        **{
+            direction: _paired_outcomes(by_direction[direction])
+            for direction in RELATIONS
+            if direction in by_direction
+        },
+    }
 
     report: dict[str, Any] = {
         "records": len(records),
@@ -92,6 +112,7 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
             else None
         ),
         "paired_outcomes_inverse_vs_native": outcomes,
+        "paired_outcomes_object_vs_direction_by_direction": paired_outcomes_by_direction,
     }
     if unknown_variants:
         report["unknown_variants"] = sorted(unknown_variants)
@@ -104,34 +125,43 @@ def _save_plot(report: dict[str, Any], path: Path) -> None:
     except ImportError as exc:
         raise RuntimeError("Plotting requires matplotlib; install it to use --plot.") from exc
 
-    counts = report["paired_outcomes_inverse_vs_native"]
+    outcomes_by_direction = report["paired_outcomes_object_vs_direction_by_direction"]
+    labels = ["overall", *(direction for direction in RELATIONS if direction in outcomes_by_direction)]
+    labels = [label for label in labels if outcomes_by_direction[label]["paired_count"]]
+    if not labels:
+        raise ValueError("No complete direction/object pairs were found for plotting.")
     colors = {
         "improved": "#2a9d8f",
         "worsened": "#e76f51",
         "unchanged_correct": "#457b9d",
         "unchanged_incorrect": "#9aa0a6",
     }
-    labels = {
-        "improved": "Improved\n(wrong → correct)",
-        "worsened": "Worsened\n(correct → wrong)",
-        "unchanged_correct": "Unchanged:\ncorrect",
-        "unchanged_incorrect": "Unchanged:\nincorrect",
+    display = {
+        "improved": "Improved (direction wrong → object correct)",
+        "worsened": "Worsened (direction correct → object wrong)",
+        "unchanged_correct": "Unchanged: correct",
+        "unchanged_incorrect": "Unchanged: incorrect",
     }
-    figure, axis = plt.subplots(figsize=(8, 5))
-    keys = list(OUTCOME_KEYS)
-    bars = axis.bar(
-        [labels[key] for key in keys],
-        [counts[key] for key in keys],
-        color=[colors[key] for key in keys],
-    )
-    for bar, key in zip(bars, keys):
-        axis.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(counts[key]), ha="center", va="bottom")
-    axis.set_ylabel("Number of paired prompts")
-    axis.set_title("3DSRBench direction/object prompt-variation outcomes\n(inverse object answer versus native direction answer)")
+    figure, axis = plt.subplots(figsize=(11, 6))
+    bottom = [0] * len(labels)
+    for key in OUTCOME_KEYS:
+        values = [outcomes_by_direction[label][key] for label in labels]
+        axis.bar(labels, values, bottom=bottom, label=display[key], color=colors[key])
+        bottom = [current + value for current, value in zip(bottom, values)]
+    axis.set_ylabel("Number of matched source relations")
+    axis.set_title("3DSRBench direction/object paired outcomes")
+    axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2)
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(figure)
+
+
+def _default_plot_path(submission: Path) -> Path:
+    """Place the chart in the run directory when given its submissions file."""
+    if submission.parent.name == "submissions":
+        return submission.parent.parent / "3dsrbench_paired_outcomes.png"
+    return submission.with_name(f"{submission.stem}_paired_outcomes.png")
 
 
 def _print_report(report: dict[str, Any]) -> None:
@@ -145,19 +175,32 @@ def _print_report(report: dict[str, Any]) -> None:
         print(f"  {key}: {report['paired_outcomes_inverse_vs_native'][key]}")
     gain = report["paired_gain_inverse_minus_native"]
     print(f"  mean gain: {'N/A' if gain is None else f'{gain:+.4f}'}")
+    print("\nDirection-to-object paired outcomes by direction")
+    for direction, counts in report["paired_outcomes_object_vs_direction_by_direction"].items():
+        print(
+            f"  {direction}: improved={counts['improved']}, worsened={counts['worsened']}, "
+            f"unchanged-correct={counts['unchanged_correct']}, "
+            f"unchanged-incorrect={counts['unchanged_incorrect']} "
+            f"({counts['paired_count']} pairs)"
+        )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("submission", type=Path, help="Path to the JSON submission list")
-    parser.add_argument("--plot", type=Path, metavar="PATH", help="Write the paired-outcomes bar chart")
+    parser.add_argument(
+        "--plot",
+        type=Path,
+        metavar="PATH",
+        help="Write the paired-outcomes bar chart (default: run directory)",
+    )
     parser.add_argument("--json", action="store_true", dest="as_json", help="Print machine-readable JSON")
     args = parser.parse_args()
 
     report = analyze(_load_records(args.submission))
-    if args.plot:
-        _save_plot(report, args.plot)
-        print(f"Saved paired-outcomes plot to {args.plot}", file=sys.stderr)
+    plot_path = args.plot or _default_plot_path(args.submission)
+    _save_plot(report, plot_path)
+    print(f"Saved paired-outcomes plot to {plot_path}", file=sys.stderr)
     if args.as_json:
         print(json.dumps(report, indent=2))
     else:

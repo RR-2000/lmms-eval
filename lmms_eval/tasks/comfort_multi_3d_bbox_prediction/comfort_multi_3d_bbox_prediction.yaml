@@ -1,0 +1,54 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/COMFORT_Multi_3D/scenes.jsonl
+task: "comfort_multi_3d_bbox_prediction"
+test_split: test
+output_type: generate_until
+process_docs: !function utils.process_docs
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_results
+
+generation_kwargs:
+  max_new_tokens: 64
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+
+metric_list:
+  - metric: bbox_iou
+    aggregation: !function utils.aggregate_bbox_iou
+    higher_is_better: true
+  - metric: bbox_acc_0_25
+    aggregation: !function utils.aggregate_bbox_acc_0_25
+    higher_is_better: true
+  - metric: bbox_acc_0_5
+    aggregation: !function utils.aggregate_bbox_acc_0_5
+    higher_is_better: true
+  - metric: bbox_acc_0_75
+    aggregation: !function utils.aggregate_bbox_acc_0_75
+    higher_is_better: true
+  - metric: bbox_parse_success
+    aggregation: !function utils.aggregate_bbox_parse_success
+    higher_is_better: true
+  - metric: reference_bbox_iou
+    aggregation: !function utils.aggregate_reference_bbox_iou
+    higher_is_better: true
+  - metric: target_bbox_iou
+    aggregation: !function utils.aggregate_target_bbox_iou
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+
+metadata:
+  - version: 1.0
