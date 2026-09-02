@@ -1,0 +1,67 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/COMFORT_Multi_3D/scenes.jsonl
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_object_direction_results
+
+generation_kwargs:
+  max_new_tokens: 32
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+
+metric_list:
+  - metric: basis_format_accuracy
+    aggregation: !function utils.aggregate_basis_format_accuracy
+    higher_is_better: true
+  - metric: basis_object_answer_accuracy
+    aggregation: !function utils.aggregate_basis_object_answer_accuracy
+    higher_is_better: true
+  - metric: basis_direction_answer_accuracy
+    aggregation: !function utils.aggregate_basis_direction_answer_accuracy
+    higher_is_better: true
+  - metric: basis_object_minus_direction
+    aggregation: !function utils.aggregate_basis_object_minus_direction
+    higher_is_better: true
+  - metric: basis_format_switch_gain
+    aggregation: !function utils.aggregate_basis_format_switch_gain
+    higher_is_better: true
+  - metric: basis_format_parse_success
+    aggregation: !function utils.aggregate_basis_format_parse_success
+    higher_is_better: true
+  - metric: basis_object_parse_success
+    aggregation: !function utils.aggregate_basis_object_parse_success
+    higher_is_better: true
+  - metric: basis_direction_parse_success
+    aggregation: !function utils.aggregate_basis_pair_direction_parse_success
+    higher_is_better: true
+  - metric: basis_object_correct_direction_wrong
+    aggregation: !function utils.aggregate_basis_object_correct_direction_wrong
+    higher_is_better: false
+  - metric: basis_direction_correct_object_wrong
+    aggregation: !function utils.aggregate_basis_direction_correct_object_wrong
+    higher_is_better: false
+  - metric: basis_pair_both_correct
+    aggregation: !function utils.aggregate_basis_pair_both_correct
+    higher_is_better: true
+  - metric: basis_pair_both_wrong
+    aggregation: !function utils.aggregate_basis_pair_both_wrong
+    higher_is_better: false
+  - metric: submission
+    aggregation: !function utils.aggregate_object_direction_submission
+    higher_is_better: false
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+
+metadata:
+  - version: 1.0

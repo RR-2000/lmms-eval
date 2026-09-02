@@ -1,0 +1,3 @@
+task: "comfort_multi_3d_camera_basis_object_direction"
+include: _object_direction_template_yaml
+process_docs: !function utils.process_camera_basis_object_direction_docs

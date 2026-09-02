@@ -79,6 +79,8 @@ the reference-relative left, right, front, and behind positions.
 | `33` | Green target box on direction-answer rows only | Explains target box | Localization oracle | Direction classification once target is located |
 | `34` | Original RGB | Reveals correct answer text, not its letter | Full oracle | Answer-text to option-letter matching |
 | `35` | Original RGB | Reveals correct option letter only | Full oracle | Pure output compliance ceiling |
+| `36` | Four much shorter direction-word-labeled arrows | Same explanation as `6` | Orientation | Arrow extent/occlusion control for mode `6` |
+| `37` | Short labeled `front` and `left` arrows only | Explains the two shown axes and their opposites | Orientation | Whether two perpendicular axes suffice without redundant opposite arrows |
 
 Modes `16` and `29` intentionally duplicate the explicit dual-map condition.
 Mode `16` preserves the earlier experiment numbering; mode `29` completes the
@@ -137,6 +139,8 @@ comparing only aggregate accuracies.
 | `21` vs `6` | One heading axis versus all four supplied axes |
 | `6` vs `22` | Direction words rendered in image versus color legend in prompt |
 | `6` vs `7` | Whether the perspective explanation adds value after axes are visible |
+| `6` vs `36` | Whether the long mode-6 arrows help spatial projection or hurt through image occlusion |
+| `36` vs `37` | Four explicit short axes versus inferring right/behind as opposites of left/front |
 | `4` vs `30` | Visual heading cue versus textual camera-frame heading cue |
 | `30` vs `31` | One heading mapping versus the complete coordinate transform |
 | `11` vs `14` | Object labels inside the diagram versus prompt-only color grounding |
@@ -183,7 +187,7 @@ GT_HELP=20 python -m lmms_eval \
 Run the full catalog with separate output directories:
 
 ```bash
-for gt_help in $(seq 0 35); do
+for gt_help in $(seq 0 37); do
   GT_HELP="${gt_help}" python -m lmms_eval \
     --model dummy --model_args response=A \
     --tasks comfort_direction_object_gt_help \
@@ -194,7 +198,27 @@ done
 
 The experiment summarizer is
 `tools/summarize_comfort_direction_object_gt_help_experiments.py`. Point it at
-the common parent directory after evaluations finish.
+the common parent directory after evaluations finish. By default it summarizes
+modes `0-14` plus short-arrow modes `36` and `37`, reports missing runs,
+compares every available mode to mode `0`
+by question ID, and writes JSON, CSV, Markdown, text, accuracy, paired-outcome,
+and baseline-transition artifacts:
+
+```bash
+python tools/summarize_comfort_direction_object_gt_help_experiments.py \
+  outputs/comforter_comfort_direction_object_gt_help_all_variants_debug
+```
+
+Use `--modes 0-14,36-37` explicitly for the same default set. To isolate the
+arrow ablations, use `--modes 0,6,36,37`; arbitrary selections such as
+`--modes 0,4,6-10,14,36-37` are also accepted.
+
+The `summary/per_mode/gt_help_<mode>/` directories contain analyzer-style
+answer-case reports for every discovered mode: relation-level object/direction
+accuracy and paired outcomes, direction-answer confusion, object-answer
+selected-object-direction confusion, option-letter distributions, and three
+per-mode plots. `summary/per_mode/all_modes_answer_cases.csv` combines both
+confusion tables from every mode into one long-form table.
 
 ## Saving model-visible images
 

@@ -1,0 +1,66 @@
+task: "comfort_multi_3d_camera_basis_combined"
+include: _default_template_yaml
+process_docs: !function utils.process_camera_combined_docs
+
+generation_kwargs:
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+
+metric_list:
+  - metric: basis_direction_accuracy
+    aggregation: !function utils.aggregate_basis_direction_accuracy
+    higher_is_better: true
+  - metric: basis_vector_cosine
+    aggregation: !function utils.aggregate_basis_vector_cosine
+    higher_is_better: true
+  - metric: basis_vector_l2_score
+    aggregation: !function utils.aggregate_basis_vector_l2_score
+    higher_is_better: true
+  - metric: basis_vector_angle_30_accuracy
+    aggregation: !function utils.aggregate_basis_vector_angle_30_accuracy
+    higher_is_better: true
+  - metric: basis_vector_dominant_direction_accuracy
+    aggregation: !function utils.aggregate_basis_vector_dominant_direction_accuracy
+    higher_is_better: true
+  - metric: basis_front_sign_accuracy
+    aggregation: !function utils.aggregate_basis_front_sign_accuracy
+    higher_is_better: true
+  - metric: basis_up_sign_accuracy
+    aggregation: !function utils.aggregate_basis_up_sign_accuracy
+    higher_is_better: true
+  - metric: basis_right_sign_accuracy
+    aggregation: !function utils.aggregate_basis_right_sign_accuracy
+    higher_is_better: true
+  - metric: basis_full_sign_accuracy
+    aggregation: !function utils.aggregate_basis_full_sign_accuracy
+    higher_is_better: true
+  - metric: basis_direction_parse_success
+    aggregation: !function utils.aggregate_basis_direction_parse_success
+    higher_is_better: true
+  - metric: basis_vector_parse_success
+    aggregation: !function utils.aggregate_basis_vector_parse_success
+    higher_is_better: true
+  - metric: basis_combined_parse_success
+    aggregation: !function utils.aggregate_basis_combined_parse_success
+    higher_is_better: true
+  - metric: basis_combined_parse_failure
+    aggregation: !function utils.aggregate_basis_combined_parse_failure
+    higher_is_better: false
+  - metric: basis_both_correct
+    aggregation: !function utils.aggregate_basis_both_correct
+    higher_is_better: true
+  - metric: basis_direction_correct_vector_wrong
+    aggregation: !function utils.aggregate_basis_direction_correct_vector_wrong
+    higher_is_better: false
+  - metric: basis_direction_wrong_vector_correct
+    aggregation: !function utils.aggregate_basis_direction_wrong_vector_correct
+    higher_is_better: false
+  - metric: basis_both_wrong
+    aggregation: !function utils.aggregate_basis_both_wrong
+    higher_is_better: false
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false

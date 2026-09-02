@@ -17,10 +17,7 @@ from typing import Any
 
 
 DIRECTIONS = ("left", "right", "front", "behind")
-DEFAULT_SUBMISSION = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/comfort_direction_object_0/"
-    "submissions/comfort_direction_object_qwen3_vl_experiments.json"
-)
+DEFAULT_SUBMISSION = Path("/home/ramanathan/VLM/lmms-eval/outputs/comfort_direction_object_0/" "submissions/comfort_direction_object_qwen3_vl_experiments.json")
 DEFAULT_SCENES = Path("/home/ramanathan/data/COMFORT_Multi_3D/scenes.jsonl")
 
 
@@ -43,26 +40,20 @@ def load_object_directions(path: Path) -> dict[str, dict[str, str]]:
             positions = scene.get("objects_at_reference_directions")
             if not isinstance(scene_id, str) or not isinstance(positions, dict):
                 raise ValueError(f"Invalid scene metadata at {path}:{line_number}")
-            lookup[scene_id] = {
-                str(object_name): direction
-                for direction, object_name in positions.items()
-                if direction in DIRECTIONS and isinstance(object_name, str)
-            }
+            lookup[scene_id] = {str(object_name): direction for direction, object_name in positions.items() if direction in DIRECTIONS and isinstance(object_name, str)}
     return lookup
 
 
 def selected_option(row: dict[str, Any]) -> str | None:
     letter = str(row.get("predicted_option_letter") or "").upper()
     options = row.get("options")
-    if letter not in "ABCD" or not isinstance(options, list):
+    if len(letter) != 1 or letter not in "ABCD" or not isinstance(options, list):
         return None
     index = ord(letter) - ord("A")
     return str(options[index]) if index < len(options) else None
 
 
-def count_distributions(
-    records: list[dict[str, Any]], object_directions: dict[str, dict[str, str]]
-) -> tuple[dict[str, Counter[str]], dict[str, Counter[str]], dict[str, int]]:
+def count_distributions(records: list[dict[str, Any]], object_directions: dict[str, dict[str, str]]) -> tuple[dict[str, Counter[str]], dict[str, Counter[str]], dict[str, int]]:
     direction_counts = {direction: Counter() for direction in DIRECTIONS}
     object_counts = {direction: Counter() for direction in DIRECTIONS}
     skipped = Counter()
@@ -94,8 +85,12 @@ def save_plot(counts: dict[str, Counter[str]], title: str, output: Path) -> None
     labels = [*DIRECTIONS]
     categories = [*DIRECTIONS, "unmapped object", "parse failure"]
     colors = {
-        "left": "#4C78A8", "right": "#F58518", "front": "#54A24B",
-        "behind": "#E45756", "unmapped object": "#B8B8B8", "parse failure": "#6B6B6B",
+        "left": "#4C78A8",
+        "right": "#F58518",
+        "front": "#54A24B",
+        "behind": "#E45756",
+        "unmapped object": "#B8B8B8",
+        "parse failure": "#6B6B6B",
     }
     figure, axis = plt.subplots(figsize=(9, 6))
     bottom = [0] * len(labels)
@@ -127,19 +122,24 @@ def main() -> None:
     args = parser.parse_args()
 
     output_dir = args.output_dir or args.submission.parent / f"{args.submission.stem}_direction_plots"
-    direction_counts, object_counts, skipped = count_distributions(
-        load_records(args.submission), load_object_directions(args.scenes)
-    )
+    direction_counts, object_counts, skipped = count_distributions(load_records(args.submission), load_object_directions(args.scenes))
     direction_plot = output_dir / "direction_gt_vs_predicted_direction.png"
     object_plot = output_dir / "object_gt_vs_predicted_object_direction.png"
     save_plot(direction_counts, "Direction tasks: ground truth vs model-selected direction", direction_plot)
     save_plot(object_counts, "Object tasks: ground truth vs direction of selected object", object_plot)
     summary_path = output_dir / "direction_distributions.json"
-    summary_path.write_text(json.dumps({
-        "direction_tasks": serialise(direction_counts),
-        "object_tasks": serialise(object_counts),
-        "skipped": skipped,
-    }, indent=2) + "\n", encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(
+            {
+                "direction_tasks": serialise(direction_counts),
+                "object_tasks": serialise(object_counts),
+                "skipped": skipped,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     print(f"Saved: {direction_plot}\nSaved: {object_plot}\nSaved: {summary_path}")
 
 

@@ -1,0 +1,10 @@
+group: comfort_multi_3d_basis_all
+task:
+  - comfort_multi_3d_object_basis_direction
+  - comfort_multi_3d_object_basis_vector
+  - comfort_multi_3d_object_basis_combined
+  - comfort_multi_3d_camera_basis_direction
+  - comfort_multi_3d_camera_basis_vector
+  - comfort_multi_3d_camera_basis_combined
+  - comfort_multi_3d_object_basis_object_direction
+  - comfort_multi_3d_camera_basis_object_direction

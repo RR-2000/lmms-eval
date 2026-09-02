@@ -1061,32 +1061,44 @@ def _build_task_instructions(doc) -> str:
     reference_object = gt_spec["reference_object"]
     target_object = gt_spec["target_object"]
 
-    lines = [
-        "[INSTRUCTIONS]",
-        "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
-        "Use this canonical camera-frame convention for every 3D coordinate or vector you return:",
-        "- The camera (POV) center is at the origin (0,0,0).",
-        "- The camera is looking along the positive Y-axis.",
-        "- In the frame, `right` is +X, `front` is +Y, and `up` is +Z.",
-        "- `right` > 0 means the target is to the camera-right of the reference.",
-        "- `up` > 0 means the target is to the camera-up of the reference.",
-        "- `front` > 0 means the target is farther forward along the viewing direction",
-        "- 'answer' is the object/direction that satisfies the question from the perspective mentioned in the question.",
-        "- `scale_ratio` means apparent target size divided by apparent reference size.",
-        "- 'relative_vector' is the target-minus-reference displacement in the camera frame described above in the format {'right':<float>,'up':<float>,'front':<float>}.",
-        "- 'camera_vector' is the direction from the anchor object to the camera in the format {'right':<float>,'up':<float>,'front':<float>}.",
-        "- 'camera_distance' is the Euclidean distance from the anchor object center to the camera",
-        "- Following are the rules for this particular task:",
-    ]
-
     if doc.get("vector_frame") == "anchor_facing_camera":
-        lines.extend(
-            [
-                "For this task, `relative_vector` and `camera_vector` instead use the anchor-facing frame.",
-                "The anchor is facing the camera: `front` points from the anchor toward the camera, `right` is the anchor's own right, and `up` is world up.",
-                "Thus the camera has positive `front`, and a target with positive `right` is on the anchor's right while it looks at the camera.",
-            ]
-        )
+        # This task is explicitly object-centric: do not first define a
+        # camera-origin frame and then override it.  The frame below matches
+        # _compute_anchor_facing_vector and _anchor_to_camera_facing_vector.
+        lines = [
+            "[INSTRUCTIONS]",
+            "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
+            "Use this canonical reference-object frame for every 3D vector you return:",
+            "- The reference anchor object's centre is the origin (0,0,0).",
+            "- Imagine standing at the anchor and looking back at the camera.",
+            "- `front` (+Y) points horizontally from the anchor toward the camera.",
+            "- `right` (+X) is the anchor's own right while it looks at the camera; therefore it appears on the camera/image LEFT, not screen-right.",
+            "- `up` (+Z) is world up.",
+            "- `relative_vector` is target-minus-anchor in this anchor-facing frame: positive `right`/`front`/`up` mean the target is respectively to the anchor's right, toward the camera, or above the anchor.",
+            "- `camera_vector` is anchor-to-camera in the same frame. Its horizontal `right` component is 0 and its `front` component is positive by construction.",
+            "- `camera_distance` is the Euclidean distance from the anchor centre to the camera.",
+            "- `scale_ratio` means apparent target size divided by apparent reference size.",
+            "- `answer` is the object/direction that satisfies the question from the anchor's perspective.",
+            "- Following are the rules for this particular task:",
+        ]
+    else:
+        lines = [
+            "[INSTRUCTIONS]",
+            "Return only valid JSON. The `_vector` fields are mandatory and are heavily evaluated. Never omit them and never use [0, 0, 0] unless the two objects are exactly coincident.",
+            "Use this canonical camera-frame convention for every 3D coordinate or vector you return:",
+            "- The camera (POV) center is at the origin (0,0,0).",
+            "- The camera is looking along the positive Y-axis.",
+            "- In the frame, `right` is +X, `front` is +Y, and `up` is +Z.",
+            "- `right` > 0 means the target is to the camera-right of the reference.",
+            "- `up` > 0 means the target is to the camera-up of the reference.",
+            "- `front` > 0 means the target is farther forward along the viewing direction",
+            "- 'answer' is the object/direction that satisfies the question from the perspective mentioned in the question.",
+            "- `scale_ratio` means apparent target size divided by apparent reference size.",
+            "- 'relative_vector' is the target-minus-reference displacement in the camera frame described above in the format {'right':<float>,'up':<float>,'front':<float>}.",
+            "- 'camera_vector' is the direction from the anchor object to the camera in the format {'right':<float>,'up':<float>,'front':<float>}.",
+            "- 'camera_distance' is the Euclidean distance from the anchor object center to the camera",
+            "- Following are the rules for this particular task:",
+        ]
 
     if task_family == "camera_relative_position":
         lines.extend(
@@ -1126,8 +1138,7 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 f"Target object: {target_object}",
-                "Express the target-minus-anchor displacement in the camera frame described above.",
-                "The directions are relative to the reference anchor object, not the camera. The answer should be framed from the anchor object's perspective, look back at the camera.",
+                "Express the target-minus-anchor displacement in the anchor-facing frame described above.",
                 f"Answer with the discrete relation word",
                 'JSON schema: {"answer":"<left|right|front|behind>","target_object":"'
                 + target_object
@@ -1141,8 +1152,7 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 f"Candidate target objects: {candidate_text}",
-                "Express each candidate target relative to the anchor in the camera frame described above.",
-                "The directions are relative to the reference anchor object, not the camera. The answer should be framed from the anchor object's perspective, look back at the camera.",
+                "Express each candidate target relative to the anchor in the anchor-facing frame described above.",
                 f"Answer with the chosen target object name",
                 'JSON schema: {"answer":"<object name>","target_object":"<object name>","relative_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>,"scale_ratio":<float>}',
             ]
@@ -1152,8 +1162,7 @@ def _build_task_instructions(doc) -> str:
             [
                 f"Reference anchor object: {reference_object}",
                 f"Target object: {target_object}",
-                "Express the target-minus-anchor displacement in the camera frame described above.",
-                "The directions are relative to the reference anchor object, not the camera. The answer should be framed from the anchor object's perspective, look back at the camera.",
+                "Express the target-minus-anchor displacement in the anchor-facing frame described above.",
                 f"Answer with `yes` or `no`.",
                 'JSON schema: {"answer":"<yes|no>","target_object":"'
                 + target_object
@@ -1164,7 +1173,7 @@ def _build_task_instructions(doc) -> str:
         lines.extend(
             [
                 f"Reference anchor object: {reference_object}",
-                "Estimate the camera position relative to the anchor object in the canonical camera frame described above.",
+                "Estimate the camera position relative to the anchor object in the anchor-facing frame described above.",
                 f"Answer with the dominant horizontal relation word: `<Answer>` is the gold label format.",
                 'JSON schema: {"answer":"<left|right|front|behind>","camera_vector":{"right":<float>,"up":<float>,"front":<float>},"camera_distance":<float>}',
             ]

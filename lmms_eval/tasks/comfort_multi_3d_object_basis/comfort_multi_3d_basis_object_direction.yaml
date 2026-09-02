@@ -1,0 +1,4 @@
+group: comfort_multi_3d_basis_object_direction
+task:
+  - comfort_multi_3d_object_basis_object_direction
+  - comfort_multi_3d_camera_basis_object_direction

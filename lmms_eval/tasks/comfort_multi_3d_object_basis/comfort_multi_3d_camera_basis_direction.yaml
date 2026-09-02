@@ -1,0 +1,21 @@
+task: "comfort_multi_3d_camera_basis_direction"
+include: _default_template_yaml
+process_docs: !function utils.process_camera_direction_docs
+
+generation_kwargs:
+  max_new_tokens: 16
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+
+metric_list:
+  - metric: basis_direction_accuracy
+    aggregation: !function utils.aggregate_basis_direction_accuracy
+    higher_is_better: true
+  - metric: basis_direction_parse_success
+    aggregation: !function utils.aggregate_basis_direction_parse_success
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false

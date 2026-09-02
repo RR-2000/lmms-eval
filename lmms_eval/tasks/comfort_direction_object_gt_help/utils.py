@@ -1,6 +1,6 @@
 """Composable visual and textual GT aids for COMFORT_Multi_3D.
 
-Set ``GT_HELP`` to 0..35.  The preset registry near the bottom is deliberately
+Set ``GT_HELP`` to 0..37.  The preset registry near the bottom is deliberately
 made from ordinary functions: experiments can combine aids by putting several
 draw/describe functions in one preset without changing the task entry points.
 """
@@ -22,7 +22,7 @@ from lmms_eval.utils import sanitize_model_name
 
 DATA_ROOT = Path("/home/ramanathan/data/COMFORT_Multi_3D")
 SCENES_PATH = DATA_ROOT / "scenes.jsonl"
-VALID_GT_HELP = frozenset(str(value) for value in range(36))
+VALID_GT_HELP = frozenset(str(value) for value in range(38))
 DEBUG_SAVE_DEFAULT_DIR = Path("outputs/comfort_direction_object_gt_help_debug_images")
 
 REFERENCE_COLOR = (255, 64, 64)
@@ -114,9 +114,7 @@ def get_object_at_direction(doc: dict, direction: str) -> dict:
     for obj in get_scene_objects(doc):
         if obj.get("reference_direction") == direction:
             return obj
-    raise KeyError(
-        f"Scene {doc.get('scene_id')!r} has no target at direction {direction!r}"
-    )
+    raise KeyError(f"Scene {doc.get('scene_id')!r} has no target at direction {direction!r}")
 
 
 def get_bbox_normalized(obj: dict) -> tuple[float, float, float, float]:
@@ -222,9 +220,7 @@ def draw_numbered_object_bboxes(doc: dict, image: Image.Image) -> Image.Image:
     return output
 
 
-def draw_target_bbox_for_direction_questions(
-    doc: dict, image: Image.Image
-) -> Image.Image:
+def draw_target_bbox_for_direction_questions(doc: dict, image: Image.Image) -> Image.Image:
     """Localize the named target only on direction-answer rows."""
     if doc.get("diagnostic_answer_format") != "direction":
         return image
@@ -234,9 +230,7 @@ def draw_target_bbox_for_direction_questions(
     return output
 
 
-def _semantic_direction_camera_vector(
-    doc: dict, direction: str
-) -> tuple[float, float, float]:
+def _semantic_direction_camera_vector(doc: dict, direction: str) -> tuple[float, float, float]:
     """Return a reference-to-direction-target vector in camera coordinates.
 
     The generated scene explicitly places a target at each semantic direction.
@@ -245,9 +239,7 @@ def _semantic_direction_camera_vector(
     """
     reference_position = get_camera_position(get_reference_object(doc))
     direction_position = get_camera_position(get_object_at_direction(doc, direction))
-    return tuple(
-        direction_position[index] - reference_position[index] for index in range(3)
-    )
+    return tuple(direction_position[index] - reference_position[index] for index in range(3))
 
 
 def _direction_screen_direction(doc: dict, direction: str) -> tuple[float, float]:
@@ -345,13 +337,23 @@ def _draw_direction_arrow(
     draw.text((label_x + 3, label_y + 2), label, fill=(0, 0, 0))
 
 
-def draw_reference_direction_arrows(doc: dict, image: Image.Image) -> Image.Image:
-    """Superimpose the reference object's four labeled semantic directions."""
+def _draw_reference_direction_arrows_with_scale(
+    doc: dict,
+    image: Image.Image,
+    *,
+    length_scale: float,
+    minimum_length: float,
+    directions: Iterable[str] = base.DIRECTIONS,
+) -> Image.Image:
+    """Draw the labeled semantic axes with configurable arrow length."""
     output = image.copy()
     reference = get_reference_object(doc)
     left, top, right, bottom = bbox_to_pixels(reference, output)
     start = ((left + right) / 2.0, (top + bottom) / 2.0)
-    length = max(38.0, 1.15 * math.hypot(right - left, bottom - top))
+    length = max(
+        minimum_length,
+        length_scale * math.hypot(right - left, bottom - top),
+    )
     width = _line_width(output) + 1
     draw = ImageDraw.Draw(output)
     radius = max(4, width + 1)
@@ -361,7 +363,7 @@ def draw_reference_direction_arrows(doc: dict, image: Image.Image) -> Image.Imag
         outline=(0, 0, 0),
         width=max(1, width // 2),
     )
-    for direction in base.DIRECTIONS:
+    for direction in directions:
         _draw_direction_arrow(
             draw,
             start,
@@ -375,14 +377,43 @@ def draw_reference_direction_arrows(doc: dict, image: Image.Image) -> Image.Imag
     return output
 
 
+def draw_reference_direction_arrows(doc: dict, image: Image.Image) -> Image.Image:
+    """Superimpose the reference object's four labeled semantic directions."""
+    return _draw_reference_direction_arrows_with_scale(
+        doc,
+        image,
+        length_scale=1.15,
+        minimum_length=38.0,
+    )
+
+
+def draw_short_reference_direction_arrows(doc: dict, image: Image.Image) -> Image.Image:
+    """Draw mode-6-style labeled axes at roughly 40% of their usual length."""
+    return _draw_reference_direction_arrows_with_scale(
+        doc,
+        image,
+        length_scale=0.45,
+        minimum_length=18.0,
+    )
+
+
+def draw_short_reference_front_left_arrows(doc: dict, image: Image.Image) -> Image.Image:
+    """Draw only the short labeled front and left axes from mode 36."""
+    return _draw_reference_direction_arrows_with_scale(
+        doc,
+        image,
+        length_scale=0.45,
+        minimum_length=18.0,
+        directions=("front", "left"),
+    )
+
+
 def draw_reference_bbox_and_heading_arrow(doc: dict, image: Image.Image) -> Image.Image:
     """Box the reference and add an arrow with no text rendered in the image."""
     return draw_reference_front_arrow(doc, draw_reference_bbox(doc, image))
 
 
-def draw_reference_bbox_and_labeled_front_arrow(
-    doc: dict, image: Image.Image
-) -> Image.Image:
+def draw_reference_bbox_and_labeled_front_arrow(doc: dict, image: Image.Image) -> Image.Image:
     """Box the reference and label its single projected heading arrow as front."""
     output = draw_reference_bbox(doc, image)
     reference = get_reference_object(doc)
@@ -401,9 +432,7 @@ def draw_reference_bbox_and_labeled_front_arrow(
     return output
 
 
-def draw_reference_symbolic_direction_arrows(
-    doc: dict, image: Image.Image
-) -> Image.Image:
+def draw_reference_symbolic_direction_arrows(doc: dict, image: Image.Image) -> Image.Image:
     """Draw four color-coded arrows without direction words inside the image."""
     output = image.copy()
     reference = get_reference_object(doc)
@@ -560,9 +589,7 @@ def _reference_map_panel(
     return panel
 
 
-def _camera_map_panel(
-    doc: dict, size: int, *, semantic_colors: bool = True
-) -> Image.Image:
+def _camera_map_panel(doc: dict, size: int, *, semantic_colors: bool = True) -> Image.Image:
     """Render actual object positions in the camera right/forward plane."""
     panel = Image.new("RGB", (size, size), TOP_DOWN_BACKGROUND)
     draw = ImageDraw.Draw(panel)
@@ -598,11 +625,7 @@ def _camera_map_panel(
             draw,
             position,
             radius,
-            TOP_DOWN_COLORS[direction][0]
-            if semantic_colors
-            else (245, 200, 40)
-            if direction == "reference"
-            else (115, 145, 180),
+            TOP_DOWN_COLORS[direction][0] if semantic_colors else (245, 200, 40) if direction == "reference" else (115, 145, 180),
             str(obj.get("label", "")),
             label_font,
             size,
@@ -652,13 +675,7 @@ def _query_map_panel(doc: dict, size: int, *, include_distractors: bool) -> Imag
         selected = direction == "reference" or obj is answer_object
         if not include_distractors and not selected:
             continue
-        color = (
-            (245, 200, 40)
-            if direction == "reference"
-            else (35, 205, 220)
-            if selected
-            else (190, 194, 200)
-        )
+        color = (245, 200, 40) if direction == "reference" else (35, 205, 220) if selected else (190, 194, 200)
         _draw_map_circle(
             draw,
             positions[direction],
@@ -825,10 +842,7 @@ def describe_all_object_bboxes(doc: dict) -> str:
 
 
 def response_format_scaffold(doc: dict) -> str:
-    return (
-        "Response-format rule: return exactly one option letter, A, B, C, or D. "
-        "For example, if the second option is correct, respond with B."
-    )
+    return "Response-format rule: return exactly one option letter, A, B, C, or D. " "For example, if the second option is correct, respond with B."
 
 
 def neutral_reference_perspective_example(doc: dict) -> str:
@@ -849,10 +863,7 @@ def identify_reference_object(doc: dict) -> str:
 
 def describe_reference_crop(doc: dict) -> str:
     obj = get_reference_object(doc)
-    return (
-        f"Image aid: the red box and magnified inset identify the reference object "
-        f"({obj.get('label')})."
-    )
+    return f"Image aid: the red box and magnified inset identify the reference object " f"({obj.get('label')})."
 
 
 def numbered_object_mapping(doc: dict) -> str:
@@ -870,35 +881,27 @@ def describe_reference_front_arrow(doc: dict) -> str:
 
 def describe_reference_heading_arrow(doc: dict) -> str:
     obj = get_reference_object(doc)
-    return (
-        f"Image aid: the red box marks the reference object ({obj.get('label')}); "
-        "the cyan arrow without an image label shows its heading (its own front)."
-    )
+    return f"Image aid: the red box marks the reference object ({obj.get('label')}); " "the cyan arrow without an image label shows its heading (its own front)."
 
 
 def describe_labeled_reference_front_arrow(doc: dict) -> str:
     obj = get_reference_object(doc)
-    return (
-        f"Image aid: the red box marks the reference object ({obj.get('label')}); "
-        "its single cyan arrow is labeled 'front'. Derive the other three axes from it."
-    )
+    return f"Image aid: the red box marks the reference object ({obj.get('label')}); " "its single cyan arrow is labeled 'front'. Derive the other three axes from it."
 
 
 def describe_symbolic_direction_arrows(doc: dict) -> str:
     obj = get_reference_object(doc)
-    return (
-        f"Image aid: four arrows originate at the reference object ({obj.get('label')}). "
-        "The fixed color legend is orange=left, blue=right, green=front, and "
-        "purple=behind; direction words are not rendered inside the image."
-    )
+    return f"Image aid: four arrows originate at the reference object ({obj.get('label')}). " "The fixed color legend is orange=left, blue=right, green=front, and " "purple=behind; direction words are not rendered inside the image."
 
 
 def describe_reference_direction_arrows(doc: dict) -> str:
     obj = get_reference_object(doc)
-    return (
-        "Image aid: the four labeled arrows superimposed on the reference object "
-        f"({obj.get('label')}) show its own left, right, front, and behind directions."
-    )
+    return "Image aid: the four labeled arrows superimposed on the reference object " f"({obj.get('label')}) show its own left, right, front, and behind directions."
+
+
+def describe_reference_front_left_arrows(doc: dict) -> str:
+    obj = get_reference_object(doc)
+    return "Image aid: the two short labeled arrows superimposed on the reference " f"object ({obj.get('label')}) show its own front and left directions. " "Infer behind as opposite front and right as opposite left."
 
 
 def explain_reference_perspective(doc: dict) -> str:
@@ -928,12 +931,7 @@ def reference_vs_camera_example(doc: dict) -> str:
     if doc.get("diagnostic_answer_format") == "direction":
         target = get_answer_object(doc)
         camera_answer = _camera_direction_for_object(doc, target)
-        contrast = (
-            f"Use {relation}, the reference-frame answer, not {camera_answer}, the "
-            "camera-frame description."
-            if camera_answer != relation
-            else f"Both frames happen to give {relation} here, but derive it from the reference frame."
-        )
+        contrast = f"Use {relation}, the reference-frame answer, not {camera_answer}, the " "camera-frame description." if camera_answer != relation else f"Both frames happen to give {relation} here, but derive it from the reference frame."
         return (
             f"Frame comparison for this question: the {target.get('label')} is "
             f"{relation} from the reference object's perspective, so the expected "
@@ -943,11 +941,7 @@ def reference_vs_camera_example(doc: dict) -> str:
 
     expected_object = get_answer_object(doc)
     camera_direction = _camera_direction_for_object(doc, expected_object)
-    contrast = (
-        f"Thus camera-{relation} would be the wrong rule for finding it."
-        if camera_direction != relation
-        else "The two direction labels happen to agree here, but the reference-frame rule still governs."
-    )
+    contrast = f"Thus camera-{relation} would be the wrong rule for finding it." if camera_direction != relation else "The two direction labels happen to agree here, but the reference-frame rule still governs."
     return (
         f"Frame comparison for this question: at reference-relative {relation}, the "
         f"expected answer is {expected_object.get('label')}. From the camera perspective, "
@@ -964,37 +958,26 @@ def top_down_color_mapping(doc: dict) -> str:
         mappings.append(f"{color_name}={obj.get('label')}{role}")
     return (
         "Top-down map aid: the reference object is centered and its facing direction "
-        "is toward the top of the map. Color-to-object mapping: "
-        + "; ".join(mappings)
-        + ". Use the map's reference-centered geometry when answering the question."
+        "is toward the top of the map. Color-to-object mapping: " + "; ".join(mappings) + ". Use the map's reference-centered geometry when answering the question."
     )
 
 
 def unlabeled_top_down_color_mapping(doc: dict) -> str:
-    mappings = [
-        f"{TOP_DOWN_COLORS[direction][1]}={obj.get('label')}"
-        for direction, obj in _map_object_records(doc)
-    ]
+    mappings = [f"{TOP_DOWN_COLORS[direction][1]}={obj.get('label')}" for direction, obj in _map_object_records(doc)]
     return (
         "Color-only top-down aid: the yellow circle at the center is the reference "
         "object, and its black heading marker points toward the top of the map. Circle "
-        "colors map to objects as follows: "
-        + "; ".join(mappings)
-        + ". The map itself intentionally contains no object or direction words."
+        "colors map to objects as follows: " + "; ".join(mappings) + ". The map itself intentionally contains no object or direction words."
     )
 
 
 def labeled_top_down_mapping(doc: dict) -> str:
-    return (
-        top_down_color_mapping(doc)
-        + " The map also labels the reference-relative left, right, front, and behind axes explicitly."
-    )
+    return top_down_color_mapping(doc) + " The map also labels the reference-relative left, right, front, and behind axes explicitly."
 
 
 def dual_top_down_mapping(doc: dict) -> str:
     return (
-        top_down_color_mapping(doc)
-        + " The first panel canonicalizes the reference object's own axes; the second "
+        top_down_color_mapping(doc) + " The first panel canonicalizes the reference object's own axes; the second "
         "panel shows the same colored objects in camera right/forward coordinates. "
         "Answer from the first, reference-frame panel, not from the camera-frame panel."
     )
@@ -1016,114 +999,69 @@ def canonical_numeric_layout(doc: dict) -> str:
     return (
         "Reference-relative numeric layout: coordinates are (horizontal, forward), "
         "with positive horizontal toward the reference object's right and positive "
-        "forward toward its front. "
-        + "; ".join(records)
-        + ". Infer the requested relation or object from these coordinates."
+        "forward toward its front. " + "; ".join(records) + ". Infer the requested relation or object from these coordinates."
     )
 
 
 def describe_map_only(doc: dict) -> str:
-    return (
-        top_down_color_mapping(doc)
-        + " This canonical map replaces the original RGB scene, removing appearance and background cues."
-    )
+    return top_down_color_mapping(doc) + " This canonical map replaces the original RGB scene, removing appearance and background cues."
 
 
 def describe_query_pair_map(doc: dict) -> str:
     reference = get_reference_object(doc)
     target = get_answer_object(doc)
-    return (
-        "Question-entity map: yellow marks the centered reference object "
-        f"({reference.get('label')}) and cyan marks {target.get('label')}; all other "
-        "objects are removed. The reference heading marker points toward the top."
-    )
+    return "Question-entity map: yellow marks the centered reference object " f"({reference.get('label')}) and cyan marks {target.get('label')}; all other " "objects are removed. The reference heading marker points toward the top."
 
 
 def describe_highlighted_query_map(doc: dict) -> str:
     target = get_answer_object(doc)
-    return (
-        "Attention-oracle map: yellow marks the reference, cyan highlights the "
-        f"question's answer entity ({target.get('label')}), and gray circles are "
-        "distractors. The reference heading marker points toward the top."
-    )
+    return "Attention-oracle map: yellow marks the reference, cyan highlights the " f"question's answer entity ({target.get('label')}), and gray circles are " "distractors. The reference heading marker points toward the top."
 
 
 def describe_camera_map_control(doc: dict) -> str:
-    return (
-        "Camera-frame control: the added panel places the named objects using camera "
-        "left/right/front/behind coordinates, centered on the reference object."
-    )
+    return "Camera-frame control: the added panel places the named objects using camera " "left/right/front/behind coordinates, centered on the reference object."
 
 
 def describe_dual_maps_without_selection(doc: dict) -> str:
     return (
         "Two coordinate views are provided: the first panel is centered on the "
         "reference object's own axes and the second uses the camera's axes. Both "
-        "panels contain the same color-to-object correspondences: "
-        + "; ".join(
-            f"{TOP_DOWN_COLORS[direction][1]}={obj.get('label')}"
-            for direction, obj in _map_object_records(doc)
-        )
-        + "."
+        "panels contain the same color-to-object correspondences: " + "; ".join(f"{TOP_DOWN_COLORS[direction][1]}={obj.get('label')}" for direction, obj in _map_object_records(doc)) + "."
     )
 
 
 def describe_reference_heading_in_camera_frame(doc: dict) -> str:
     reference = get_reference_object(doc)
-    camera_direction = _camera_direction_for_object(
-        doc, get_object_at_direction(doc, "front")
-    )
-    return (
-        f"Orientation help: the {reference.get('label')}'s own front points mostly "
-        f"toward camera-{camera_direction}. Use that heading to derive its other axes."
-    )
+    camera_direction = _camera_direction_for_object(doc, get_object_at_direction(doc, "front"))
+    return f"Orientation help: the {reference.get('label')}'s own front points mostly " f"toward camera-{camera_direction}. Use that heading to derive its other axes."
 
 
 def describe_reference_to_camera_axis_mapping(doc: dict) -> str:
     mappings = []
     for direction in base.DIRECTIONS:
-        camera_right, camera_forward, _ = _semantic_direction_camera_vector(
-            doc, direction
-        )
+        camera_right, camera_forward, _ = _semantic_direction_camera_vector(doc, direction)
         norm = math.hypot(camera_right, camera_forward)
         if norm < 1e-8:
             raise ValueError(f"Degenerate camera-plane direction for {direction!r}")
-        mappings.append(
-            f"reference-{direction}=({camera_right / norm:+.2f} camera-right, "
-            f"{camera_forward / norm:+.2f} camera-forward)"
-        )
-    return (
-        "Reference-to-camera axis mapping using normalized camera-plane vectors: "
-        + "; ".join(mappings)
-        + "."
-    )
+        mappings.append(f"reference-{direction}=({camera_right / norm:+.2f} camera-right, " f"{camera_forward / norm:+.2f} camera-forward)")
+    return "Reference-to-camera axis mapping using normalized camera-plane vectors: " + "; ".join(mappings) + "."
 
 
 def reveal_relation_for_object_questions(doc: dict) -> str:
     if doc.get("diagnostic_answer_format") != "object":
         return ""
-    return (
-        "Relation-oracle help for this object-answer row: the required "
-        f"reference-relative relation is {base._relation(doc)}."
-    )
+    return "Relation-oracle help for this object-answer row: the required " f"reference-relative relation is {base._relation(doc)}."
 
 
 def reveal_target_for_direction_questions(doc: dict) -> str:
     if doc.get("diagnostic_answer_format") != "direction":
         return ""
-    return (
-        "Target-localization oracle for this direction-answer row: the green box "
-        f"marks the named question target ({get_answer_object(doc).get('label')}). "
-        "Classify its position relative to the reference object."
-    )
+    return "Target-localization oracle for this direction-answer row: the green box " f"marks the named question target ({get_answer_object(doc).get('label')}). " "Classify its position relative to the reference object."
 
 
 def ground_truth_free_text(doc: dict) -> str:
     index = int(doc["answer_idx"])
-    return (
-        "Answer-text oracle: the correct answer text is "
-        f"'{doc['options'][index]}'. Match that text to the options and return its letter."
-    )
+    return "Answer-text oracle: the correct answer text is " f"'{doc['options'][index]}'. Match that text to the options and return its letter."
 
 
 def ground_truth_letter_only(doc: dict) -> str:
@@ -1140,9 +1078,7 @@ VisualAid = Callable[[dict, Image.Image], Image.Image]
 TextAid = Callable[[dict], str]
 
 
-def compose_visual_aids(
-    doc: dict, image: Image.Image, aids: Iterable[VisualAid]
-) -> Image.Image:
+def compose_visual_aids(doc: dict, image: Image.Image, aids: Iterable[VisualAid]) -> Image.Image:
     output = image
     for aid in aids:
         output = aid(doc, output)
@@ -1259,6 +1195,14 @@ GT_HELP_PRESETS: dict[str, dict[str, tuple]] = {
     },
     "34": {"visual": (), "text": (ground_truth_free_text,)},
     "35": {"visual": (), "text": (ground_truth_letter_only,)},
+    "36": {
+        "visual": (draw_short_reference_direction_arrows,),
+        "text": (describe_reference_direction_arrows,),
+    },
+    "37": {
+        "visual": (draw_short_reference_front_left_arrows,),
+        "text": (describe_reference_front_left_arrows,),
+    },
 }
 
 
@@ -1275,10 +1219,7 @@ def _debug_save_enabled() -> bool:
         return False
     if value in {"1", "true", "yes", "on"}:
         return True
-    raise ValueError(
-        "GT_HELP_DEBUG must be a boolean value such as 0/1 or false/true, "
-        f"got {value!r}"
-    )
+    raise ValueError("GT_HELP_DEBUG must be a boolean value such as 0/1 or false/true, " f"got {value!r}")
 
 
 def save_debug_image(doc: dict, image: Image.Image, mode: str) -> Optional[Path]:
@@ -1286,15 +1227,10 @@ def save_debug_image(doc: dict, image: Image.Image, mode: str) -> Optional[Path]
     if not _debug_save_enabled():
         return None
 
-    output_dir = Path(
-        os.getenv("GT_HELP_DEBUG_DIR", str(DEBUG_SAVE_DEFAULT_DIR))
-    ).expanduser()
+    output_dir = Path(os.getenv("GT_HELP_DEBUG_DIR", str(DEBUG_SAVE_DEFAULT_DIR))).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_id = str(doc.get("qid") or doc.get("id") or doc.get("index") or "sample")
-    safe_id = "".join(
-        character if character.isalnum() or character in {"-", "_"} else "_"
-        for character in raw_id
-    ).strip("_") or "sample"
+    safe_id = "".join(character if character.isalnum() or character in {"-", "_"} else "_" for character in raw_id).strip("_") or "sample"
     output_path = output_dir / f"gt_help_{mode}_{safe_id}.png"
     image.save(output_path, format="PNG")
     eval_logger.info("Saved GT-help debug image to {}.", output_path)
@@ -1345,9 +1281,7 @@ def process_results(doc, results):
 
 def aggregate_results_for_submission(results, args):
     model = sanitize_model_name(getattr(args, "model", "") or "unknown_model")
-    path = generate_submission_file(
-        f"comfort_direction_object_gt_help_{get_gt_help_mode()}_{model}.json", args
-    )
+    path = generate_submission_file(f"comfort_direction_object_gt_help_{get_gt_help_mode()}_{model}.json", args)
     report = {
         "dataset": "COMFORT_Multi_3D",
         "task": "comfort_direction_object_gt_help",

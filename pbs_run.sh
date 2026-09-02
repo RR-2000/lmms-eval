@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N lmms-kubric_movi_a_direction_object_clean_better_sample
-#PBS -l select=1:ncpus=4:ngpus=1:mem=20gb:host=cvml06
+#PBS -N lmms-kubric_movi_a_object_centric_looking_back_better_sample
+#PBS -l select=1:ncpus=4:ngpus=1:mem=20gb:host=cvml03
 
 # Activate the Conda environment
 source /apps/miniconda3/etc/profile.d/conda.sh
@@ -25,6 +25,9 @@ conda activate lmms
 # kubric_movi_a_object_centric_looking_back_better_sample
 # comfort_reference_orientation_viewpoint
 # kubric_movi_a_direction_object_clean_better_sample
+# comfort_multi_3d_object_basis, comfort_multi_3d_camera_basis
+# comfort_multi_3d_basis_object_direction
+# 
 
 # qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct, Qwen/Qwen3-VL-4B-Thinking
 # qwen2_5_vl, rayruiyang/VST-7B-RL
@@ -41,10 +44,10 @@ conda activate lmms
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
-  --tasks kubric_movi_a_direction_object_clean_better_sample \
+  --tasks kubric_movi_a_object_centric_looking_back_better_sample \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_object_clean_better_sample_0
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_object_centric_looking_back_better_sample_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_direct_answer_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0
