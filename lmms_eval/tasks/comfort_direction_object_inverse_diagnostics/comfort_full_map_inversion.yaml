@@ -1,0 +1,39 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/COMFORT_Multi_3D/annotations.jsonl
+task: comfort_full_map_inversion
+test_split: test
+output_type: generate_until
+process_docs: !function utils.process_full_map_inversion_docs
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_full_map_results
+generation_kwargs:
+  max_new_tokens: 160
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+metric_list:
+  - metric: mapping_edge_accuracy
+    aggregation: !function utils.aggregate_mapping_edge_accuracy
+    higher_is_better: true
+  - metric: mapping_exact_accuracy
+    aggregation: !function utils.aggregate_mapping_exact_accuracy
+    higher_is_better: true
+  - metric: parse_success_rate
+    aggregation: !function utils.aggregate_parse_success_rate
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+metadata:
+  version: 1.0
+

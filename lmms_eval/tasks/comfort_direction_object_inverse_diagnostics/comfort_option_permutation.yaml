@@ -1,0 +1,51 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/COMFORT_Multi_3D/annotations.jsonl
+task: comfort_option_permutation
+test_split: test
+output_type: generate_until
+process_docs: !function utils.process_option_permutation_docs
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_permutation_results
+generation_kwargs:
+  max_new_tokens: 24
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.aggregate_accuracy
+    higher_is_better: true
+  - metric: object_answer_accuracy
+    aggregation: !function utils.aggregate_object_answer_accuracy
+    higher_is_better: true
+  - metric: direction_answer_accuracy
+    aggregation: !function utils.aggregate_direction_answer_accuracy
+    higher_is_better: true
+  - metric: object_minus_direction
+    aggregation: !function utils.aggregate_object_minus_direction
+    higher_is_better: true
+  - metric: permutation_semantic_consistency
+    aggregation: !function utils.aggregate_permutation_semantic_consistency
+    higher_is_better: true
+  - metric: permutation_all_correct_rate
+    aggregation: !function utils.aggregate_permutation_all_correct_rate
+    higher_is_better: true
+  - metric: parse_success_rate
+    aggregation: !function utils.aggregate_parse_success_rate
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+metadata:
+  version: 1.0
+

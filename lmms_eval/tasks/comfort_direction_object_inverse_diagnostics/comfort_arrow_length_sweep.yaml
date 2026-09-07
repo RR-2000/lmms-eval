@@ -1,0 +1,4 @@
+task: comfort_arrow_length_sweep
+include: _mc_template_yaml
+process_docs: !function utils.process_arrow_length_sweep_docs
+

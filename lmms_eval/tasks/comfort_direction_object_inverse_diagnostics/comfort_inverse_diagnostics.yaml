@@ -1,0 +1,7 @@
+group: comfort_inverse_diagnostics
+task:
+  - comfort_full_map_inversion
+  - comfort_arrow_length_sweep
+  - comfort_map_ablation
+  - comfort_option_permutation
+
