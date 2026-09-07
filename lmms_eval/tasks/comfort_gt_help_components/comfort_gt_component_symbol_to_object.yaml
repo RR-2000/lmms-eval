@@ -1,0 +1,4 @@
+task: comfort_gt_component_symbol_to_object
+include: _classification_template_yaml
+process_docs: !function utils.process_symbol_to_object_docs
+

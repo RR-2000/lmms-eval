@@ -1,0 +1,4 @@
+task: comfort_gt_component_text_axes_direction
+include: _classification_template_yaml
+process_docs: !function utils.process_text_axes_direction_docs
+

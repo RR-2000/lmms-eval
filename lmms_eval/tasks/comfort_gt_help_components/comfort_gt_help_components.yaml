@@ -1,0 +1,16 @@
+group: comfort_gt_help_components
+task:
+  - comfort_gt_component_bbox_prediction
+  - comfort_gt_component_bbox_naming
+  - comfort_gt_component_facing_direction
+  - comfort_gt_component_front_arrow
+  - comfort_gt_component_left_arrow
+  - comfort_gt_component_symbol_to_object
+  - comfort_gt_component_object_to_symbol
+  - comfort_gt_component_long_arrow_to_symbol
+  - comfort_gt_component_short_arrow_to_symbol
+  - comfort_gt_component_vector_to_direction
+  - comfort_gt_component_direction_to_vector
+  - comfort_gt_component_text_axes_direction
+  - comfort_gt_component_overlay_axes_direction
+

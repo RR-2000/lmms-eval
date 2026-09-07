@@ -1,0 +1,4 @@
+task: comfort_gt_component_vector_to_direction
+include: _classification_template_yaml
+process_docs: !function utils.process_vector_to_direction_docs
+

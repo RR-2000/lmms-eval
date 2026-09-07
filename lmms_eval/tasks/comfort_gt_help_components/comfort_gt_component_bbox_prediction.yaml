@@ -1,0 +1,4 @@
+task: comfort_gt_component_bbox_prediction
+include: _bbox_template_yaml
+process_docs: !function utils.process_bbox_prediction_docs
+

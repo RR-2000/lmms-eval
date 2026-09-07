@@ -1,0 +1,4 @@
+task: comfort_gt_component_long_arrow_to_symbol
+include: _classification_template_yaml
+process_docs: !function utils.process_long_arrow_to_symbol_docs
+

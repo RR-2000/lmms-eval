@@ -1,0 +1,4 @@
+task: comfort_gt_component_direction_to_vector
+include: _vector_template_yaml
+process_docs: !function utils.process_direction_to_vector_docs
+

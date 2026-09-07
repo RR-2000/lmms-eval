@@ -1,0 +1,4 @@
+task: comfort_gt_component_front_arrow
+include: _arrow_template_yaml
+process_docs: !function utils.process_front_arrow_docs
+
