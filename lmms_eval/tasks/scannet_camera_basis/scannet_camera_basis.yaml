@@ -1,0 +1,5 @@
+group: scannet_camera_basis
+task:
+  - scannet_camera_basis_direction
+  - scannet_camera_basis_vector
+  - scannet_camera_basis_combined
