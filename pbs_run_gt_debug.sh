@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N comfort-direction-object-gt-debug
-#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:host=cvml10
+#PBS -l select=1:ncpus=4:ngpus=1:mem=24gb:host=cvml03
 
 set -euo pipefail
 source /apps/miniconda3/etc/profile.d/conda.sh
@@ -10,9 +10,9 @@ nvidia-smi
 conda activate lmms
 
 TASK_NAME="comfort_direction_object_gt_help"
-OUTPUT_ROOT="/home/ramanathan/VLM/lmms-eval/outputs/comforter_${TASK_NAME}_all_variants_debug"
+OUTPUT_ROOT="/home/ramanathan/VLM/lmms-eval/outputs/comforter_${TASK_NAME}_all_variants_debug_8"
 
-for gt_help in 37; do
+for gt_help in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 36 37; do
   variant_dir="${OUTPUT_ROOT}/gt_help_${gt_help}"
   echo "Running ${TASK_NAME} with GT_HELP=${gt_help}"
 
@@ -21,7 +21,7 @@ for gt_help in 37; do
   GT_HELP="${gt_help}" \
   python -m lmms_eval \
     --model qwen3_vl_experiments \
-    --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-4B-Instruct" \
+    --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-8B-Instruct" \
     --limit -1 \
     --batch_size 1 \
     --log_samples \
