@@ -11,10 +11,8 @@ from typing import Any, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
-
 DEFAULT_SUBMISSION = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/comfort_bbox/evaluation/"
-    "submissions/comfort_multi_3d_bbox_prediction_qwen3_vl_experiments.json"
+    "/home/ramanathan/VLM/lmms-eval/outputs/comfort_bbox/evaluation/" "submissions/comfort_multi_3d_bbox_prediction_qwen3_vl_experiments.json"
 )
 COORDINATE_MAX = 1000.0
 GT_COLOR = (35, 220, 80)
@@ -59,11 +57,7 @@ def _valid_bbox(value: Any) -> Optional[list[float]]:
     except (TypeError, ValueError):
         return None
     x1, y1, x2, y2 = box
-    if not (
-        all(0.0 <= item <= COORDINATE_MAX for item in box)
-        and x2 > x1
-        and y2 > y1
-    ):
+    if not (all(0.0 <= item <= COORDINATE_MAX for item in box) and x2 > x1 and y2 > y1):
         return None
     return box
 
@@ -258,10 +252,8 @@ def main() -> None:
     scene_items = list(grouped.items())
     if args.limit is not None:
         scene_items = scene_items[: args.limit]
-    output_dir = (
-        args.output_dir
-        or args.submission.parent / "bbox_visualizations"
-    ).resolve()
+    output_dir = (args.output_dir or args.submission.parent / "bbox_visualizations").resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     scene_reports = []
     for index, (scene_id, rows) in enumerate(scene_items, start=1):
@@ -279,22 +271,32 @@ def main() -> None:
         "object_count": total_objects,
         "parsed_count": total_parsed,
         "parse_failure_count": total_objects - total_parsed,
-        "mean_iou": (
-            sum(
-                item["iou"]
-                for report in scene_reports
-                for item in report["objects"]
-            )
-            / total_objects
-            if total_objects
-            else None
-        ),
+        "mean_iou": (sum(item["iou"] for report in scene_reports for item in report["objects"]) / total_objects if total_objects else None),
         "scenes": scene_reports,
     }
     summary_path = output_dir / "visualization_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    parse_rate = total_parsed / total_objects if total_objects else 0.0
+    mean_iou = summary["mean_iou"]
+    markdown_lines = [
+        "# COMFORT bbox prediction visualization summary",
+        "",
+        f"Submission: `{args.submission.resolve()}`",
+        "",
+        f"- Scenes rendered: **{len(scene_reports)}**",
+        f"- Objects evaluated: **{total_objects}**",
+        f"- Parsed predictions: **{total_parsed}** ({parse_rate:.1%})",
+        f"- Parse failures: **{total_objects - total_parsed}**",
+        f"- Mean IoU: **{mean_iou:.4f}**" if mean_iou is not None else "- Mean IoU: **N/A**",
+        "",
+        "Rendered overlays are stored in this directory. The complete per-scene and per-object values are in `visualization_summary.json`.",
+        "",
+    ]
+    markdown_path = output_dir / "summary.md"
+    markdown_path.write_text("\n".join(markdown_lines), encoding="utf-8")
     print(f"Saved {len(scene_reports)} scene visualizations to {output_dir}")
     print(f"Saved summary: {summary_path}")
+    print(f"Saved Markdown summary: {markdown_path}")
 
 
 if __name__ == "__main__":

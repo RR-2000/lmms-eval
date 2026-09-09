@@ -11,10 +11,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 
-
-DEFAULT_INPUT = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/comfort_viewpoint_0/Qwen__Qwen3-VL-4B-Instruct/20260722_142023_results.json"
-)
+DEFAULT_INPUT = Path("/home/ramanathan/VLM/lmms-eval/outputs/comfort_viewpoint_0/Qwen__Qwen3-VL-4B-Instruct/20260722_142023_results.json")
 TASK = "comfort_viewpoint"
 
 OUTCOME_METRICS = [
@@ -53,9 +50,7 @@ SUMMARY_METRICS = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Plot COMFORT viewpoint metrics and infer failure modes."
-    )
+    parser = argparse.ArgumentParser(description="Plot COMFORT viewpoint metrics and infer failure modes.")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument(
         "--samples",
@@ -94,10 +89,7 @@ def values_from_samples(samples: list[dict[str, Any]]) -> dict[str, float]:
         "comfort_answer_wrong_direction_correct": "answer_wrong_direction_correct",
         "comfort_answer_and_direction_wrong": "answer_and_direction_wrong",
     }
-    values = {
-        metric_name: sum(float(row.get(field_name, 0.0)) for row in samples) / len(samples)
-        for metric_name, field_name in field_map.items()
-    }
+    values = {metric_name: sum(float(row.get(field_name, 0.0)) for row in samples) / len(samples) for metric_name, field_name in field_map.items()}
     for viewpoint, metric_name in (
         ("camera", "comfort_camera_answer_accuracy"),
         ("reference", "comfort_reference_answer_accuracy"),
@@ -117,11 +109,7 @@ def load_input(path: Path, task: str) -> tuple[dict[str, float], list[dict[str, 
         return values_from_samples(samples), samples, True
     results = load_results(path, task)
     names = SUMMARY_METRICS + OUTCOME_METRICS
-    values = {
-        name: float(results[f"{name},none"])
-        for name in names
-        if isinstance(results.get(f"{name},none"), (int, float))
-    }
+    values = {name: float(results[f"{name},none"]) for name in names if isinstance(results.get(f"{name},none"), (int, float))}
     return values, [], False
 
 
@@ -216,8 +204,7 @@ def plot_split_rectangles(samples: list[dict[str, Any]], directory: Path) -> Pat
     ax.set_xlabel("Fraction of questions")
     ax.set_title("COMFORT Answer/Direction Ratios")
     handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in OUTCOME_COLORS]
-    ax.legend(handles, [OUTCOME_LABELS[name] for name in OUTCOME_METRICS],
-              loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
+    ax.legend(handles, [OUTCOME_LABELS[name] for name in OUTCOME_METRICS], loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
     ax.grid(axis="x", alpha=0.2)
     fig.tight_layout()
     path = directory / "answer_direction_split_rectangles.png"
@@ -226,9 +213,7 @@ def plot_split_rectangles(samples: list[dict[str, Any]], directory: Path) -> Pat
     return path
 
 
-def plot_split_rectangles_with_invalid_direction(
-    samples: list[dict[str, Any]], directory: Path
-) -> Path | None:
+def plot_split_rectangles_with_invalid_direction(samples: list[dict[str, Any]], directory: Path) -> Path | None:
     """Draw 100% outcome rectangles with zero direction vectors shown separately."""
     if not samples:
         return None
@@ -261,8 +246,7 @@ def plot_split_rectangles_with_invalid_direction(
     ax.set_xlabel("Share of questions")
     ax.set_title("COMFORT Outcomes (Zero Directions Shown as Invalid)")
     handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in colors]
-    ax.legend(handles, [labels[name] for name in outcomes],
-              loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
+    ax.legend(handles, [labels[name] for name in outcomes], loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
     ax.grid(axis="x", alpha=0.2)
     fig.tight_layout()
     path = directory / "answer_direction_split_rectangles_with_invalid_zero_direction.png"
@@ -285,8 +269,7 @@ def plot_question_outcome_strip(samples: list[dict[str, Any]], directory: Path) 
     ax.set_xlabel(f"{len(ordered)} questions; ordered by viewpoint and question id")
     ax.set_title("Per-Question Answer/Direction Outcome")
     handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in OUTCOME_COLORS]
-    ax.legend(handles, [OUTCOME_LABELS[name] for name in OUTCOME_METRICS],
-              loc="upper center", bbox_to_anchor=(0.5, -0.32), ncol=2, frameon=False)
+    ax.legend(handles, [OUTCOME_LABELS[name] for name in OUTCOME_METRICS], loc="upper center", bbox_to_anchor=(0.5, -0.32), ncol=2, frameon=False)
     fig.tight_layout()
     path = directory / "per_question_outcome_strip.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
@@ -311,7 +294,7 @@ def plot_summary(values: dict[str, float], directory: Path) -> Path:
     names = [name for name in SUMMARY_METRICS if name in values]
     labels = [METRIC_LABELS[name] for name in names]
     scores = [values[name] for name in names]
-    colors = ["#457B9D", "#8D99AE", "#3A86FF", "#2A9D8F", "#E9C46A", "#F4A261"][:len(names)]
+    colors = ["#457B9D", "#8D99AE", "#3A86FF", "#2A9D8F", "#E9C46A", "#F4A261"][: len(names)]
     fig, ax = plt.subplots(figsize=(11, 5.5))
     bars = ax.bar(labels, scores, color=colors)
     ax.set_ylim(0, 1)
@@ -394,7 +377,9 @@ def infer(values: dict[str, float]) -> list[str]:
     direction = values["comfort_relation_axis_accuracy"]
     vector = values["comfort_vector_cosine"]
     if answer - direction > 0.10:
-        notes.append(f"Answer accuracy ({answer:.3f}) exceeds relation-axis accuracy ({direction:.3f}), suggesting weak spatial consistency after choosing an answer.")
+        notes.append(
+            f"Answer accuracy ({answer:.3f}) exceeds relation-axis accuracy ({direction:.3f}), suggesting weak spatial consistency after choosing an answer."
+        )
     if values["comfort_answer_correct_direction_wrong"] > values["comfort_answer_wrong_direction_correct"] + 0.05:
         notes.append("The dominant asymmetric error is correct answer with wrong direction, consistent with answer priors or shortcut reasoning.")
     if vector < 0.10:
@@ -410,14 +395,17 @@ def infer(values: dict[str, float]) -> list[str]:
     return notes
 
 
-def write_report(values: dict[str, float], directory: Path, input_path: Path) -> Path:
+def write_report(values: dict[str, float], directory: Path, input_path: Path) -> list[Path]:
     lines = ["# COMFORT Viewpoint Result Analysis", "", f"Input: `{input_path}`", "", "## Metrics", ""]
     lines.extend(f"- `{name}`: `{values[name]:.6f}`" for name in SUMMARY_METRICS + OUTCOME_METRICS if name in values)
     lines.extend(["", "## Inferences", ""])
     lines.extend(f"- {note}" for note in infer(values))
-    path = directory / "inference_report.md"
-    path.write_text("\n".join(lines) + "\n")
-    return path
+    report = "\n".join(lines) + "\n"
+    inference_path = directory / "inference_report.md"
+    summary_path = directory / "summary.md"
+    inference_path.write_text(report)
+    summary_path.write_text(report)
+    return [inference_path, summary_path]
 
 
 def main() -> int:
@@ -438,7 +426,7 @@ def main() -> int:
     ):
         if path is not None:
             outputs.append(path)
-    outputs.append(write_report(values, directory, args.input))
+    outputs.extend(write_report(values, directory, args.input))
     print("Generated analysis artifacts:")
     for path in outputs:
         if path is None:

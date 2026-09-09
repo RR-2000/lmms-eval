@@ -14,7 +14,9 @@ python -m lmms_eval \
   --output_path outputs/comfort_inverse_diagnostics
 ```
 
-The group contains four independently runnable tasks:
+The group contains six independently runnable tasks. Numbering below preserves
+the experiment numbers from the original proposal, so the new sections are 5
+and 8:
 
 | Task | Question count | Main comparison |
 |---|---:|---|
@@ -22,11 +24,14 @@ The group contains four independently runnable tasks:
 | `comfort_arrow_length_sweep` | 24,000 | object versus direction accuracy at six arrow lengths |
 | `comfort_map_ablation` | 32,000 | object versus direction accuracy under eight map components |
 | `comfort_option_permutation` | 16,000 | stability across all four cyclic option orders |
+| `comfort_binary_axis` | 4,000 | two-choice left/right and front/behind tests |
+| `comfort_oracle_ladder` | 32,000 | eight interventions targeting successively later pipeline stages |
 
-Counts assume the current 500-scene dataset. The arrow and map experiments use
-one deterministic, balanced answer permutation per scene/relation. This keeps
-gold A/B/C/D positions balanced without multiplying every visual condition by
-four. The permutation experiment retains all four orders explicitly.
+Counts assume the current 500-scene dataset. The arrow, map, and oracle
+experiments use one deterministic, balanced answer permutation per
+scene/relation. This keeps gold A/B/C/D positions balanced without multiplying
+every condition by four. The binary experiment independently balances A/B, and
+the permutation experiment retains all four original orders explicitly.
 
 Object strings are deliberately kept exactly as they appear in the source
 annotations. In particular, `horsel` and `horser` remain distinct in this task
@@ -222,9 +227,112 @@ High single-run accuracy with low semantic consistency indicates option-position
 sensitivity. High semantic consistency with low accuracy indicates a stable
 spatial misconception rather than letter bias.
 
+## 5. Binary-axis experiments
+
+### Purpose
+
+The normal task jointly requires choosing an axis and its sign from four
+answers. This experiment removes cross-axis distractors and asks only a binary
+question on one known axis:
+
+- `left_right`: choose between reference-left and reference-right;
+- `front_behind`: choose between reference-front and reference-behind.
+
+Both inverse answer formats are retained. For a direction-answer row, a prompt
+looks like:
+
+```text
+Binary-axis diagnostic: this question is restricted to the reference object's
+front/behind axis. Choose between the two supplied alternatives only.
+Question: From the dog's current viewpoint, where is the bicycle mountain?
+Options:
+A. front
+B. behind
+```
+
+For the paired object-answer row, the same relation is queried but the two
+options are the objects occupying the two ends of that axis:
+
+```text
+Question: Which object is in the direction that the behind side of the dog
+points toward?
+Options:
+A. car sedan
+B. bicycle mountain
+```
+
+Option order is deterministically balanced across scenes, and the paired
+object/direction questions use corresponding option positions.
+
+### Measurements
+
+- Raw accuracy for each axis and answer format.
+- Object-minus-direction accuracy for each axis.
+- Both-correct, object-only, direction-only, and both-wrong paired outcomes.
+- Relation-specific accuracy within each binary axis.
+- Chance-adjusted accuracy, computed as `2 * accuracy - 1` by the summarizer.
+
+Because binary chance accuracy is 50%, raw binary accuracy must not be directly
+compared with raw four-choice accuracy. Use chance-adjusted accuracy, error
+reduction, or within-binary object-versus-direction gaps. If front/behind
+direction answers remain poor after left/right distractors are removed, the
+failure is polarity or viewpoint interpretation rather than axis selection.
+
+## 8. Oracle ladder
+
+### Purpose
+
+The ladder locates the earliest pipeline stage at which a failed example can be
+recovered. Every tier uses the same scene, semantic question, options, and
+balanced option order. Only the diagnostic aid changes:
+
+| Tier | Aid | What it bypasses or tests |
+|---|---|---|
+| `baseline` | Original image, no aid | End-to-end reference point |
+| `reference_localized` | Reference bbox and identity text | Finding the reference object |
+| `heading_given` | Reference bbox plus labeled front arrow | Reference localization and heading estimation |
+| `axes_given` | Four short labeled reference axes | Deriving left/right/behind from heading |
+| `intermediate_oracle` | Object row: gold relation in text; direction row: target bbox | Relation-conditioned retrieval versus target localization |
+| `spatial_map_oracle` | Fully object- and direction-labeled canonical map | Perception and coordinate transformation |
+| `answer_text_oracle` | Correct semantic option text | Option-text matching and letter conversion |
+| `answer_letter_oracle` | Correct option letter | Output compliance ceiling |
+
+Example intermediate-oracle prompts differ intentionally by answer format:
+
+```text
+Relation-oracle help for this object-answer row: the required
+reference-relative relation is behind.
+```
+
+```text
+Target-localization oracle for this direction-answer row: the green box marks
+the named question target (bicycle mountain). Classify its position relative
+to the reference object.
+```
+
+The normal multiple-choice question follows this text unchanged.
+
+### Measurements
+
+- Overall, object, and direction accuracy at every tier.
+- Relation-specific results at every tier.
+- Paired object/direction outcome cases at every tier.
+- Per-question transitions from baseline: improved, worsened,
+  unchanged-correct, and unchanged-wrong.
+- Parse success at every tier.
+
+The first tier that repairs a sample identifies the likely missing stage. A
+gain from reference localization implicates detection; a later gain from the
+heading or axes tiers implicates orientation; recovery only with the canonical
+map implicates coordinate transformation or relation lookup. Failure at the
+answer-text tier indicates option matching, while failure at the answer-letter
+tier indicates output compliance. The intermediate tier is asymmetric by
+design and must be interpreted separately for object and direction rows.
+
 ## Comparison protocol
 
-For the arrow and map tasks, always report a condition-by-format table:
+For the arrow, map, binary-axis, and oracle tasks, always report a
+condition-by-format table:
 
 ```text
 condition | object accuracy | direction accuracy | object−direction
@@ -246,6 +354,8 @@ The most diagnostic reading order is:
 2. Option permutation: is the difference an option-letter artifact?
 3. Arrow sweep: does usable axis extent explain the gap?
 4. Map ablation: which representation component creates or removes the gap?
+5. Binary axes: does the gap survive after cross-axis distractors are removed?
+6. Oracle ladder: at which supplied-information tier are failures repaired?
 
 ## Result summarizer
 
@@ -270,8 +380,14 @@ It produces the following plots when the corresponding task is present:
 - `option_position_accuracy.png`: accuracy by cyclic answer position.
 - `option_permutation_stability.png`: semantic consistency and all-four-correct
   rates; this plot requires complete four-permutation groups.
+- `binary_axis_accuracy.png`: object/direction accuracy for left/right and
+  front/behind binary choices.
+- `oracle_ladder_accuracy.png`: object/direction accuracy through the eight
+  oracle tiers.
 
-The arrow and map CSVs also include relation-level and paired-outcome tables,
+The arrow, map, binary-axis, and oracle CSVs include relation-level and
+paired-outcome tables. `oracle_ladder_transitions.csv` additionally reports
+question-matched gains and regressions against the ladder baseline,
 so the aggregate gap can be traced to a specific relation and to
 object-only/direction-only cases rather than inferred from two independent
 means.

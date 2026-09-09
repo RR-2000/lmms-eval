@@ -1,0 +1,7 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs: {data_files: {test: /home/ramanathan/data/COMFORT_Multi_3D/scenes.jsonl}}
+task: comfort_direction_vector_arrow_grounding
+include: _default_template_yaml
+process_docs: !function utils.process_arrow_grounding_docs
+

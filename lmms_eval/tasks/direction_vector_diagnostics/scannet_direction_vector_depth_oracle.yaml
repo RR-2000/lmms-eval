@@ -1,0 +1,7 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs: {data_files: {test: /mnt/rdata4_3/Spatial_Benchmarks/scannetv2/scannet_camera_basis_manifest.jsonl}}
+task: scannet_direction_vector_depth_oracle
+include: _default_template_yaml
+process_docs: !function utils.process_scannet_depth_docs
+

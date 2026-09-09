@@ -1,0 +1,10 @@
+group: direction_vector_diagnostics_kubric
+task:
+  - kubric_direction_vector_cross_output
+  - kubric_direction_vector_output_formats
+  - kubric_direction_vector_conversion_oracle
+  - kubric_direction_vector_basis_oracle
+  - kubric_direction_vector_components
+  - kubric_direction_vector_boundaries
+  - kubric_direction_vector_arrow_grounding
+  - kubric_direction_vector_rotation

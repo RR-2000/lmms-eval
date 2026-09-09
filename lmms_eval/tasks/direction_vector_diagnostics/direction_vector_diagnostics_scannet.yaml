@@ -1,0 +1,10 @@
+group: direction_vector_diagnostics_scannet
+task:
+  - scannet_direction_vector_cross_output
+  - scannet_direction_vector_output_formats
+  - scannet_direction_vector_conversion_oracle
+  - scannet_direction_vector_basis_oracle
+  - scannet_direction_vector_components
+  - scannet_direction_vector_boundaries
+  - scannet_direction_vector_arrow_grounding
+  - scannet_direction_vector_depth_oracle

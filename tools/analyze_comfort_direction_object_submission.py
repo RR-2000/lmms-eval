@@ -24,11 +24,8 @@ from analyze_kubric_movi_e_direction_object_submission import (
     format_report,
 )
 
-
 DEFAULT_SUBMISSION = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/"
-    "comfort_direction_object_0/submissions/"
-    "comfort_direction_object_qwen3_vl_experiments.json"
+    "/home/ramanathan/VLM/lmms-eval/outputs/" "comfort_direction_object_0/submissions/" "comfort_direction_object_qwen3_vl_experiments.json"
 )
 
 
@@ -98,15 +95,21 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "comfort_direction_object_analysis.json"
     text_path = output_dir / "comfort_direction_object_analysis.txt"
+    markdown_path = output_dir / "summary.md"
     plot_path = output_dir / "comfort_paired_outcomes.png"
     json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     text_report = format_report(report)
     text_path.write_text(text_report, encoding="utf-8")
+    markdown_path.write_text(
+        "# COMFORT direction/object analysis\n\n" f"Submission: `{args.submission.resolve()}`\n\n" "```text\n" + text_report.rstrip() + "\n```\n",
+        encoding="utf-8",
+    )
     _save_paired_outcomes_plot(report, plot_path)
 
     print(json.dumps(report, indent=2) if args.print_json else text_report, end="")
     print(f"Saved JSON report: {json_path}")
     print(f"Saved text report: {text_path}")
+    print(f"Saved Markdown summary: {markdown_path}")
     print(f"Saved paired-outcomes plot: {plot_path}")
 
 

@@ -1,0 +1,4 @@
+task: comfort_binary_axis
+include: _mc_template_yaml
+process_docs: !function utils.process_binary_axis_docs
+

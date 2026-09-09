@@ -31,7 +31,6 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
-
 SOURCE_FAMILIES = (
     "object_centric_relative_position",
     "object_centric_relative_position_multi",
@@ -160,7 +159,9 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
         by_source[source_key][variant] = row
 
     by_family = {family: {variant: _summary(grouped[(family, variant)]) for variant in VARIANTS} for family in SOURCE_FAMILIES}
-    by_variant = {variant: _summary(grouped_for_variant) for variant in VARIANTS for grouped_for_variant in [[row for row in records if row.get("variant") == variant]]}
+    by_variant = {
+        variant: _summary(grouped_for_variant) for variant in VARIANTS for grouped_for_variant in [[row for row in records if row.get("variant") == variant]]
+    }
 
     paired = {}
     paired_outcomes = {}
@@ -238,7 +239,10 @@ def _print_report(report: dict[str, Any]) -> None:
         print(f"  {family}")
         for name, counts in comparisons.items():
             print(
-                f"    {name}: improved={counts['improved']}, worsened={counts['worsened']}, " f"unchanged-correct={counts['unchanged_correct']}, " f"unchanged-incorrect={counts['unchanged_incorrect']} " f"({counts['paired_count']} pairs)"
+                f"    {name}: improved={counts['improved']}, worsened={counts['worsened']}, "
+                f"unchanged-correct={counts['unchanged_correct']}, "
+                f"unchanged-incorrect={counts['unchanged_incorrect']} "
+                f"({counts['paired_count']} pairs)"
             )
 
 
@@ -250,7 +254,12 @@ def _format_report(report: dict[str, Any]) -> str:
 
     print("\nDirection-to-object paired outcomes by relation")
     for relation, counts in report["format_paired_outcomes_by_relation"].items():
-        print(f"  {relation}: improved={counts['improved']}, worsened={counts['worsened']}, " f"unchanged-correct={counts['unchanged_correct']}, " f"unchanged-incorrect={counts['unchanged_incorrect']} " f"({counts['paired_count']} pairs)")
+        print(
+            f"  {relation}: improved={counts['improved']}, worsened={counts['worsened']}, "
+            f"unchanged-correct={counts['unchanged_correct']}, "
+            f"unchanged-incorrect={counts['unchanged_incorrect']} "
+            f"({counts['paired_count']} pairs)"
+        )
 
 
 def _save_paired_outcomes_plot(report: dict[str, Any], path: Path) -> None:
@@ -566,12 +575,20 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "kubric_direction_object_analysis.json"
     text_path = output_dir / "kubric_direction_object_analysis.txt"
+    markdown_path = output_dir / "summary.md"
     paired_plot_path = (args.plot or output_dir / "kubric_paired_outcomes.png").resolve()
     answer_gt_dir = (args.answer_gt_dir or output_dir).resolve()
 
     text_report = _format_report(report)
     json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     text_path.write_text(text_report, encoding="utf-8")
+    markdown_path.write_text(
+        "# Kubric direction/object analysis\n\n"
+        f"Submission: `{args.submission.resolve()}`\n\n"
+        f"Object-direction source: `{dataset_path}`\n\n"
+        "```text\n" + text_report.rstrip() + "\n```\n",
+        encoding="utf-8",
+    )
     _save_paired_outcomes_plot(report, paired_plot_path)
     answer_gt_paths = _save_answer_gt_artifacts(
         records,
@@ -583,7 +600,7 @@ def main() -> None:
         print(json.dumps(report, indent=2))
     else:
         print(text_report, end="")
-    for path in [json_path, text_path, paired_plot_path, *answer_gt_paths]:
+    for path in [json_path, text_path, markdown_path, paired_plot_path, *answer_gt_paths]:
         print(f"Saved: {path}", file=sys.stderr)
     print(f"Object directions loaded from: {dataset_path}", file=sys.stderr)
 

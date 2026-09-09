@@ -1,0 +1,7 @@
+dataset_path: parquet
+dataset_name: null
+dataset_kwargs: {data_files: {test: /home/ramanathan/data/movi_a_3dsr_better_sample/movi_a_validation.parquet}}
+task: kubric_direction_vector_rotation
+include: _default_template_yaml
+process_docs: !function utils.process_kubric_rotation_docs
+

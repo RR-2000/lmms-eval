@@ -15,7 +15,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-
 DIRECTIONS = ("left", "right", "front", "behind")
 DEFAULT_SUBMISSION = Path("/home/ramanathan/VLM/lmms-eval/outputs/comfort_direction_object_0/" "submissions/comfort_direction_object_qwen3_vl_experiments.json")
 DEFAULT_SCENES = Path("/home/ramanathan/data/COMFORT_Multi_3D/scenes.jsonl")
@@ -40,7 +39,9 @@ def load_object_directions(path: Path) -> dict[str, dict[str, str]]:
             positions = scene.get("objects_at_reference_directions")
             if not isinstance(scene_id, str) or not isinstance(positions, dict):
                 raise ValueError(f"Invalid scene metadata at {path}:{line_number}")
-            lookup[scene_id] = {str(object_name): direction for direction, object_name in positions.items() if direction in DIRECTIONS and isinstance(object_name, str)}
+            lookup[scene_id] = {
+                str(object_name): direction for direction, object_name in positions.items() if direction in DIRECTIONS and isinstance(object_name, str)
+            }
     return lookup
 
 
@@ -53,7 +54,9 @@ def selected_option(row: dict[str, Any]) -> str | None:
     return str(options[index]) if index < len(options) else None
 
 
-def count_distributions(records: list[dict[str, Any]], object_directions: dict[str, dict[str, str]]) -> tuple[dict[str, Counter[str]], dict[str, Counter[str]], dict[str, int]]:
+def count_distributions(
+    records: list[dict[str, Any]], object_directions: dict[str, dict[str, str]]
+) -> tuple[dict[str, Counter[str]], dict[str, Counter[str]], dict[str, int]]:
     direction_counts = {direction: Counter() for direction in DIRECTIONS}
     object_counts = {direction: Counter() for direction in DIRECTIONS}
     skipped = Counter()
@@ -114,6 +117,40 @@ def serialise(counts: dict[str, Counter[str]]) -> dict[str, dict[str, int]]:
     return {direction: dict(counts[direction]) for direction in DIRECTIONS}
 
 
+def markdown_summary(
+    submission: Path,
+    direction_counts: dict[str, Counter[str]],
+    object_counts: dict[str, Counter[str]],
+    skipped: dict[str, int],
+) -> str:
+    lines = [
+        "# COMFORT answer-versus-direction distributions",
+        "",
+        f"Submission: `{submission.resolve()}`",
+        "",
+    ]
+    categories = [*DIRECTIONS, "unmapped object", "parse failure"]
+    for title, counts in (("Direction-answer questions", direction_counts), ("Object-answer questions", object_counts)):
+        lines.extend(
+            [
+                f"## {title}",
+                "",
+                "| Ground truth | " + " | ".join(categories) + " | Total |",
+                "|---|" + "---:|" * (len(categories) + 1),
+            ]
+        )
+        for direction in DIRECTIONS:
+            values = [int(counts[direction][category]) for category in categories]
+            lines.append(f"| {direction} | " + " | ".join(map(str, values)) + f" | {sum(values)} |")
+        lines.append("")
+    lines.extend(["## Skipped records", ""])
+    if skipped:
+        lines.extend(f"- `{reason}`: {count}" for reason, count in sorted(skipped.items()))
+    else:
+        lines.append("None.")
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("submission", nargs="?", type=Path, default=DEFAULT_SUBMISSION)
@@ -140,7 +177,9 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
-    print(f"Saved: {direction_plot}\nSaved: {object_plot}\nSaved: {summary_path}")
+    markdown_path = output_dir / "summary.md"
+    markdown_path.write_text(markdown_summary(args.submission, direction_counts, object_counts, skipped), encoding="utf-8")
+    print(f"Saved: {direction_plot}\nSaved: {object_plot}\nSaved: {summary_path}\nSaved: {markdown_path}")
 
 
 if __name__ == "__main__":

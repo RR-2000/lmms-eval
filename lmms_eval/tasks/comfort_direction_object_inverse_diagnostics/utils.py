@@ -1,4 +1,4 @@
-"""Four controlled experiments for COMFORT inverse spatial queries.
+"""Controlled experiments for COMFORT inverse spatial queries.
 
 The family contains full-map inversion, an arrow-length sweep, canonical-map
 ablations, and option-permutation consistency.  It deliberately reuses the
@@ -45,6 +45,20 @@ MAP_ABLATIONS = (
     "object_names_no_heading",
     "rotated_labeled",
     "rotated_unlabeled",
+)
+BINARY_AXES = {
+    "left_right": ("left", "right"),
+    "front_behind": ("front", "behind"),
+}
+ORACLE_LADDER = (
+    "baseline",
+    "reference_localized",
+    "heading_given",
+    "axes_given",
+    "intermediate_oracle",
+    "spatial_map_oracle",
+    "answer_text_oracle",
+    "answer_letter_oracle",
 )
 DEBUG_DEFAULT_DIR = Path("outputs/comfort_inverse_diagnostics_debug")
 
@@ -114,6 +128,53 @@ def process_option_permutation_docs(dataset: Dataset) -> Dataset:
         )
         records.append(record)
     return _finish(records, "option_permutation")
+
+
+def _binary_option_order(doc: dict, choices: tuple[str, str]) -> list[str]:
+    scene_text = str(doc.get("scene_id", "0"))
+    digits = "".join(character for character in scene_text if character.isdigit())
+    scene_index = int(digits or 0)
+    relation_index = DIRECTIONS.index(str(doc["diagnostic_relation"]))
+    return list(choices if (scene_index + relation_index) % 2 == 0 else choices[::-1])
+
+
+def process_binary_axis_docs(dataset: Dataset) -> Dataset:
+    records = []
+    for doc in _normalized_docs(dataset, all_permutations=False):
+        relation = str(doc["diagnostic_relation"])
+        condition = next(name for name, directions in BINARY_AXES.items() if relation in directions)
+        directions = BINARY_AXES[condition]
+        if doc["diagnostic_answer_format"] == "direction":
+            semantic_choices = directions
+            gold_answer = relation
+        else:
+            semantic_choices = tuple(
+                str(aids.get_object_at_direction(doc, direction).get("label", "")).strip()
+                for direction in directions
+            )
+            gold_answer = str(aids.get_object_at_direction(doc, relation).get("label", "")).strip()
+        options = _binary_option_order(doc, semantic_choices)
+        gold_index = options.index(gold_answer)
+        record = _conditioned_doc(doc, "binary_axis", condition)
+        record.update(
+            {
+                "options": options,
+                "answer_idx": gold_index,
+                "gold_option_letter": OPTION_LETTERS[gold_index],
+                "binary_axis": condition,
+            }
+        )
+        records.append(record)
+    return _finish(records, "binary_axis")
+
+
+def process_oracle_ladder_docs(dataset: Dataset) -> Dataset:
+    records = [
+        _conditioned_doc(doc, "oracle_ladder", condition)
+        for doc in _normalized_docs(dataset, all_permutations=False)
+        for condition in ORACLE_LADDER
+    ]
+    return _finish(records, "oracle_ladder")
 
 
 def process_full_map_inversion_docs(dataset: Dataset) -> Dataset:
@@ -276,6 +337,48 @@ def _cue_image(doc: dict, image: Image.Image, cue: str) -> Image.Image:
     raise ValueError(f"Unknown cue {cue!r}")
 
 
+ORACLE_VISUAL_AIDS = {
+    "baseline": (),
+    "reference_localized": (aids.draw_reference_bbox,),
+    "heading_given": (aids.draw_reference_bbox_and_labeled_front_arrow,),
+    "axes_given": (aids.draw_short_reference_direction_arrows,),
+    "intermediate_oracle": (aids.draw_target_bbox_for_direction_questions,),
+    "spatial_map_oracle": (aids.draw_labeled_reference_top_down_map,),
+    "answer_text_oracle": (),
+    "answer_letter_oracle": (),
+}
+
+
+ORACLE_TEXT_AIDS = {
+    "baseline": (),
+    "reference_localized": (aids.describe_reference_bbox,),
+    "heading_given": (aids.describe_labeled_reference_front_arrow,),
+    "axes_given": (aids.describe_reference_direction_arrows,),
+    "intermediate_oracle": (
+        aids.reveal_relation_for_object_questions,
+        aids.reveal_target_for_direction_questions,
+    ),
+    "spatial_map_oracle": (aids.labeled_top_down_mapping,),
+    "answer_text_oracle": (aids.ground_truth_free_text,),
+    "answer_letter_oracle": (aids.ground_truth_letter_only,),
+}
+
+
+def _oracle_image(doc: dict, image: Image.Image) -> Image.Image:
+    for visual_aid in ORACLE_VISUAL_AIDS[str(doc["experiment_condition"])]:
+        image = visual_aid(doc, image)
+    return image
+
+
+def _oracle_text(doc: dict) -> str:
+    lines = [
+        text
+        for text_aid in ORACLE_TEXT_AIDS[str(doc["experiment_condition"])]
+        if (text := text_aid(doc))
+    ]
+    return " ".join(lines)
+
+
 def _debug_enabled() -> bool:
     return str(os.getenv("COMFORT_INVERSE_DEBUG", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -304,7 +407,9 @@ def doc_to_visual(doc):
         image = _map_ablation_image(doc, image)
     elif experiment == "full_map_inversion":
         image = _cue_image(doc, image, str(doc["experiment_condition"]))
-    elif experiment != "option_permutation":
+    elif experiment == "oracle_ladder":
+        image = _oracle_image(doc, image)
+    elif experiment not in {"option_permutation", "binary_axis"}:
         raise ValueError(f"Unknown experiment {experiment!r}")
     _save_debug(doc, image)
     return [image]
@@ -369,6 +474,16 @@ def _mc_prompt(doc: dict, lmms_eval_specific_kwargs=None) -> str:
         )
     elif experiment == "map_ablation":
         aid_text = _map_text(doc)
+    elif experiment == "binary_axis":
+        axis = str(doc["experiment_condition"]).replace("_", "/")
+        aid_text = (
+            f"Binary-axis diagnostic: this question is restricted to the reference object's {axis} axis. "
+            "Choose between the two supplied alternatives only."
+        )
+    elif experiment == "oracle_ladder":
+        aid_text = _oracle_text(doc)
+        if not aid_text:
+            aid_text = "No oracle aid is supplied in this baseline condition."
     else:
         aid_text = "No spatial aid is added; this condition tests sensitivity to answer-option ordering."
     return (
@@ -467,7 +582,9 @@ def process_mc_results(doc, results):
     prediction = results[0].strip() if results else ""
     parsed = base.extract_option_letter(prediction)
     gold = str(doc["gold_option_letter"])
-    selected_answer = doc["options"][OPTION_LETTERS.index(parsed)] if parsed in OPTION_LETTERS else None
+    valid_letters = OPTION_LETTERS[: len(doc["options"])]
+    valid_selection = parsed in valid_letters
+    selected_answer = doc["options"][valid_letters.index(parsed)] if valid_selection else None
     entry = {
         "qid": doc["qid"],
         "source_qid": doc["source_qid"],
@@ -486,7 +603,7 @@ def process_mc_results(doc, results):
         "gold_option_letter": gold,
         "predicted_option_letter": parsed,
         "selected_answer": selected_answer,
-        "parse_success": float(parsed is not None),
+        "parse_success": float(valid_selection),
         "score": float(parsed == gold),
         "prediction": prediction,
     }

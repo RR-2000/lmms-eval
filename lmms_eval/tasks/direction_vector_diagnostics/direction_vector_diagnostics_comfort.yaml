@@ -1,0 +1,8 @@
+group: direction_vector_diagnostics_comfort
+task:
+  - comfort_direction_vector_cross_output
+  - comfort_direction_vector_output_formats
+  - comfort_direction_vector_conversion_oracle
+  - comfort_direction_vector_basis_oracle
+  - comfort_direction_vector_components
+  - comfort_direction_vector_arrow_grounding

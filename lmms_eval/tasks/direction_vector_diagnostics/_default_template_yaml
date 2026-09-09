@@ -1,0 +1,53 @@
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_results
+generation_kwargs:
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+metric_list:
+  - metric: diagnostic_direction_accuracy
+    aggregation: !function utils.aggregate_direction_accuracy
+    higher_is_better: true
+  - metric: diagnostic_vector_direction_accuracy
+    aggregation: !function utils.aggregate_vector_direction_accuracy
+    higher_is_better: true
+  - metric: diagnostic_vector_cosine
+    aggregation: !function utils.aggregate_vector_cosine
+    higher_is_better: true
+  - metric: diagnostic_horizontal_cosine
+    aggregation: !function utils.aggregate_horizontal_cosine
+    higher_is_better: true
+  - metric: diagnostic_front_sign_accuracy
+    aggregation: !function utils.aggregate_front_sign_accuracy
+    higher_is_better: true
+  - metric: diagnostic_up_sign_accuracy
+    aggregation: !function utils.aggregate_up_sign_accuracy
+    higher_is_better: true
+  - metric: diagnostic_right_sign_accuracy
+    aggregation: !function utils.aggregate_right_sign_accuracy
+    higher_is_better: true
+  - metric: diagnostic_internal_consistency
+    aggregation: !function utils.aggregate_internal_consistency
+    higher_is_better: true
+  - metric: diagnostic_component_accuracy
+    aggregation: !function utils.aggregate_component_accuracy
+    higher_is_better: true
+  - metric: diagnostic_parse_success
+    aggregation: !function utils.aggregate_parse_success
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+metadata:
+  version: 1.0
+

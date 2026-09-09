@@ -10,11 +10,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 
-
-DEFAULT_INPUT = Path(
-    "/home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred/"
-    "Qwen__Qwen3-VL-4B-Instruct/20260708_112529_results.json"
-)
+DEFAULT_INPUT = Path("/home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred/" "Qwen__Qwen3-VL-4B-Instruct/20260708_112529_results.json")
 
 FAMILIES = [
     "camera_relative_position",
@@ -159,9 +155,7 @@ METRIC_LABELS = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Plot Kubric MOVi-A viewpoint metrics and infer failure modes."
-    )
+    parser = argparse.ArgumentParser(description="Plot Kubric MOVi-A viewpoint metrics and infer failure modes.")
     parser.add_argument(
         "--input",
         type=Path,
@@ -183,10 +177,7 @@ def parse_args() -> argparse.Namespace:
         "--submission-input",
         type=Path,
         default=None,
-        help=(
-            "Per-example submission JSON used for the invalid-direction plot. "
-            "Defaults to the sole JSON file in the input run's submissions directory."
-        ),
+        help=("Per-example submission JSON used for the invalid-direction plot. " "Defaults to the sole JSON file in the input run's submissions directory."),
     )
     return parser.parse_args()
 
@@ -245,7 +236,13 @@ def _submission_metric(records: list[dict[str, Any]], name: str) -> float:
         return _mean_records(rows, "object_centric_camera_vector_nonzero", "object_centric_metric_available")
     if suffix in {"right_sign_accuracy", "front_sign_accuracy", "full_sign_accuracy"}:
         return _mean_records(rows, f"object_centric_{suffix}", "object_centric_metric_available")
-    if suffix in {"candidate_aware_direction_accuracy", "direction_given_predicted_object_accuracy", "ranking_accuracy_on_relation_axis", "ranking_score_on_relation_axis", "predicted_target_in_candidate_set"}:
+    if suffix in {
+        "candidate_aware_direction_accuracy",
+        "direction_given_predicted_object_accuracy",
+        "ranking_accuracy_on_relation_axis",
+        "ranking_score_on_relation_axis",
+        "predicted_target_in_candidate_set",
+    }:
         return _mean_records(rows, suffix, "multi_object_metric_available")
     return 0.0
 
@@ -253,11 +250,19 @@ def _submission_metric(records: list[dict[str, Any]], name: str) -> float:
 def submission_to_results(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Build the result-summary shape consumed by the existing plotting code."""
     names = {
-        "viewpoint_answer_accuracy", "viewpoint_axis_sign_accuracy", "viewpoint_reference_to_camera_cosine",
-        "viewpoint_reference_to_camera_distance_score", "viewpoint_vector_cosine", "viewpoint_scale_score",
-        "viewpoint_combined_score", *[f"viewpoint_{case}" for case in CASE_METRICS],
-        *GEOMETRY_METRICS, *OBJECT_CENTRIC_SINGLE_METRICS, *OBJECT_CENTRIC_MULTI_METRICS,
-        *OBJECT_CENTRIC_BINARY_METRICS, *OBJECT_CENTRIC_CAMERA_POSE_METRICS,
+        "viewpoint_answer_accuracy",
+        "viewpoint_axis_sign_accuracy",
+        "viewpoint_reference_to_camera_cosine",
+        "viewpoint_reference_to_camera_distance_score",
+        "viewpoint_vector_cosine",
+        "viewpoint_scale_score",
+        "viewpoint_combined_score",
+        *[f"viewpoint_{case}" for case in CASE_METRICS],
+        *GEOMETRY_METRICS,
+        *OBJECT_CENTRIC_SINGLE_METRICS,
+        *OBJECT_CENTRIC_MULTI_METRICS,
+        *OBJECT_CENTRIC_BINARY_METRICS,
+        *OBJECT_CENTRIC_CAMERA_POSE_METRICS,
     }
     present_families = {str(row.get("task_family")) for row in records}
     for family in present_families:
@@ -330,11 +335,7 @@ def is_invalid_zero_direction(record: dict[str, Any]) -> bool:
     if not isinstance(prediction, dict):
         return False
 
-    vector_key = (
-        "camera_vector"
-        if record.get("task_family") == "object_centric_camera_pose"
-        else "relative_vector"
-    )
+    vector_key = "camera_vector" if record.get("task_family") == "object_centric_camera_pose" else "relative_vector"
     vector = prediction.get(vector_key)
     if not isinstance(vector, dict):
         return False
@@ -349,10 +350,7 @@ def family_case_metrics_with_invalid_direction(
     records: list[dict[str, Any]],
 ) -> dict[str, dict[str, float]]:
     """Build mutually exclusive outcome shares, reserving a bucket for zero vectors."""
-    counts = {
-        family: {case: 0 for case in (*CASE_METRICS, INVALID_DIRECTION_CASE)}
-        for family in FAMILIES
-    }
+    counts = {family: {case: 0 for case in (*CASE_METRICS, INVALID_DIRECTION_CASE)} for family in FAMILIES}
     totals = {family: 0 for family in FAMILIES}
 
     for record in records:
@@ -369,10 +367,7 @@ def family_case_metrics_with_invalid_direction(
                 break
 
     return {
-        family: {
-            case: counts[family][case] / totals[family] if totals[family] else 0.0
-            for case in (*CASE_METRICS, INVALID_DIRECTION_CASE)
-        }
+        family: {case: counts[family][case] / totals[family] if totals[family] else 0.0 for case in (*CASE_METRICS, INVALID_DIRECTION_CASE)}
         for family in FAMILIES
         if totals[family]
     }
@@ -544,9 +539,7 @@ def plot_family_case_splits(family_cases: dict[str, dict[str, float]], output_di
     return output_path
 
 
-def plot_family_case_splits_with_invalid_direction(
-    family_cases: dict[str, dict[str, float]], output_dir: Path
-) -> Path:
+def plot_family_case_splits_with_invalid_direction(family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
     """Plot 100% stacked outcome bars with zero direction vectors as their own class."""
     cases = (*CASE_METRICS, INVALID_DIRECTION_CASE)
     labels = {**CASE_LABELS, INVALID_DIRECTION_CASE: INVALID_DIRECTION_LABEL}
@@ -596,6 +589,15 @@ def plot_overall_case_pie(metrics: dict[str, float], output_dir: Path) -> Path:
     colors = [CASE_COLORS[case] for case in CASE_METRICS]
 
     fig, ax = plt.subplots(figsize=(8, 6))
+    if sum(values) <= 0.0:
+        ax.text(0.5, 0.5, "No applicable outcome records", ha="center", va="center", transform=ax.transAxes, fontsize=13)
+        ax.axis("off")
+        ax.set_title("Overall Outcome Split", pad=14)
+        fig.tight_layout()
+        output_path = output_dir / "overall_case_pie.png"
+        fig.savefig(output_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        return output_path
     wedges, texts, autotexts = ax.pie(
         values,
         labels=labels,
@@ -631,6 +633,11 @@ def plot_family_case_pies(family_cases: dict[str, dict[str, float]], output_dir:
     for ax, family in zip(axes, families):
         values = [family_cases[family][case] for case in CASE_METRICS]
         labels = [CASE_LABELS[case] for case in CASE_METRICS]
+        if sum(values) <= 0.0:
+            ax.text(0.5, 0.5, "No applicable records", ha="center", va="center", transform=ax.transAxes, fontsize=10)
+            ax.axis("off")
+            ax.set_title(FAMILY_DISPLAY[family], fontsize=11)
+            continue
         ax.pie(
             values,
             labels=labels,
@@ -714,14 +721,8 @@ def plot_family_case_grouped_bars(family_cases: dict[str, dict[str, float]], out
 
 def plot_family_summary_bars(metrics: dict[str, float], family_cases: dict[str, dict[str, float]], output_dir: Path) -> Path:
     families = list(family_cases.keys())
-    answer_rates = [
-        family_cases[family]["answer_and_direction_correct"] + family_cases[family]["answer_correct_direction_wrong"]
-        for family in families
-    ]
-    direction_rates = [
-        family_cases[family]["answer_and_direction_correct"] + family_cases[family]["answer_wrong_direction_correct"]
-        for family in families
-    ]
+    answer_rates = [family_cases[family]["answer_and_direction_correct"] + family_cases[family]["answer_correct_direction_wrong"] for family in families]
+    direction_rates = [family_cases[family]["answer_and_direction_correct"] + family_cases[family]["answer_wrong_direction_correct"] for family in families]
     both_correct = [family_cases[family]["answer_and_direction_correct"] for family in families]
 
     fig, ax = plt.subplots(figsize=(11, 5.5))
@@ -1040,8 +1041,10 @@ def infer_metrics(metrics: dict[str, float], family_cases: dict[str, dict[str, f
         )
 
     comparison_families = [item for item in (camera_rel, height, object_single, object_multi) if item]
-    if camera_dist and comparison_families and camera_dist["answer_and_direction_correct"] >= max(
-        item["answer_and_direction_correct"] for item in comparison_families
+    if (
+        camera_dist
+        and comparison_families
+        and camera_dist["answer_and_direction_correct"] >= max(item["answer_and_direction_correct"] for item in comparison_families)
     ):
         notes.append(
             f"Camera-distance is the strongest family on joint correctness ({camera_dist['answer_and_direction_correct']:.3f}), implying depth-order judgments are currently easier for the model than anchor-centric viewpoint reasoning."
@@ -1064,7 +1067,7 @@ def write_inference_report(
     object_centric_camera_pose_metrics: dict[str, float],
     output_dir: Path,
     input_path: Path,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     inferences = infer_metrics(metrics, family_cases)
 
     txt_lines = [
@@ -1153,18 +1156,38 @@ def write_inference_report(
         md_lines.append(f"- {note}")
 
     md_path = output_dir / "inference_report.md"
-    md_path.write_text("\n".join(md_lines) + "\n")
-    return txt_path, md_path
+    markdown_report = "\n".join(md_lines) + "\n"
+    md_path.write_text(markdown_report)
+    summary_path = output_dir / "summary.md"
+    summary_path.write_text(markdown_report)
+    return txt_path, md_path, summary_path
 
 
 def main() -> int:
     args = parse_args()
     payload = json.loads(args.input.read_text())
     is_submission_input = isinstance(payload, list)
-    submission_records = (
-        [record for record in payload if isinstance(record, dict)] if is_submission_input else []
-    )
+    submission_input = args.input if is_submission_input else find_submission_input(args.input, args.submission_input)
+    submission_records = [record for record in payload if isinstance(record, dict)] if is_submission_input else []
+    if not is_submission_input and submission_input is not None:
+        submission_records = load_submission_records(submission_input)
     results = submission_to_results(submission_records) if is_submission_input else load_task_results(args.input, args.task)
+    if submission_records and not is_submission_input:
+        reconstructed = submission_to_results(submission_records)
+        overall_names = {
+            "viewpoint_answer_accuracy",
+            "viewpoint_axis_sign_accuracy",
+            "viewpoint_reference_to_camera_cosine",
+            "viewpoint_reference_to_camera_distance_score",
+            "viewpoint_vector_cosine",
+            "viewpoint_scale_score",
+            "viewpoint_combined_score",
+            *[f"viewpoint_{case}" for case in CASE_METRICS],
+        }
+        for name in overall_names:
+            key = f"{name},none"
+            if not isinstance(results.get(key), (int, float)):
+                results[key] = reconstructed[key]
     metrics = overall_metrics(results)
     geometry_metrics = named_metrics(results, GEOMETRY_METRICS)
     family_cases = family_case_metrics(results)
@@ -1201,21 +1224,13 @@ def main() -> int:
             output_dir / "object_centric_camera_pose_metrics.png",
         ),
     ]
-    submission_input = args.input if is_submission_input else find_submission_input(args.input, args.submission_input)
     if submission_input is not None:
-        invalid_direction_cases = family_case_metrics_with_invalid_direction(
-            submission_records if is_submission_input else load_submission_records(submission_input)
-        )
+        invalid_direction_cases = family_case_metrics_with_invalid_direction(submission_records)
         if invalid_direction_cases:
-            outputs.append(
-                plot_family_case_splits_with_invalid_direction(invalid_direction_cases, output_dir)
-            )
+            outputs.append(plot_family_case_splits_with_invalid_direction(invalid_direction_cases, output_dir))
     else:
-        print(
-            "Skipping invalid zero-direction plot: provide --submission-input or place exactly one "
-            "per-example JSON in the run's submissions directory."
-        )
-    report_txt, report_md = write_inference_report(
+        print("Skipping invalid zero-direction plot: provide --submission-input or place exactly one " "per-example JSON in the run's submissions directory.")
+    report_txt, report_md, summary_md = write_inference_report(
         metrics,
         family_cases,
         object_centric_single_metrics,
@@ -1225,7 +1240,7 @@ def main() -> int:
         output_dir,
         args.input,
     )
-    outputs.extend([report_txt, report_md])
+    outputs.extend([report_txt, report_md, summary_md])
 
     print("Generated analysis artifacts:")
     for output in outputs:

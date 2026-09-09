@@ -1,0 +1,4 @@
+task: comfort_oracle_ladder
+include: _mc_template_yaml
+process_docs: !function utils.process_oracle_ladder_docs
+

@@ -4,4 +4,5 @@ task:
   - comfort_arrow_length_sweep
   - comfort_map_ablation
   - comfort_option_permutation
-
+  - comfort_binary_axis
+  - comfort_oracle_ladder

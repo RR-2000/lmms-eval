@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize the four COMFORT object/direction inverse diagnostics."""
+"""Summarize the COMFORT object/direction inverse diagnostics."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ PREFIXES = (
     "comfort_arrow_length_sweep_",
     "comfort_map_ablation_",
     "comfort_option_permutation_",
+    "comfort_binary_axis_",
+    "comfort_oracle_ladder_",
 )
 FORMAT_COLORS = {"object": "#457B9D", "direction": "#E9C46A"}
 MAPPING_COLORS = {"relation_to_object": "#457B9D", "object_to_relation": "#E76F51"}
@@ -105,6 +107,55 @@ def paired_outcomes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 **{name: counts[name] / total for name in ("both_correct", "object_only", "direction_only", "both_wrong")},
             }
         )
+    return output
+
+
+def oracle_transitions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = defaultdict(dict)
+    for row in rows:
+        key = (str(row.get("original_source_relation_id")), str(row.get("answer_format")))
+        grouped[key][str(row.get("experiment_condition"))] = row
+    conditions = list(
+        dict.fromkeys(
+            str(row.get("experiment_condition"))
+            for row in rows
+            if row.get("experiment_condition") != "baseline"
+        )
+    )
+    output = []
+    for condition in conditions:
+        for answer_format in ("object", "direction"):
+            pairs = [
+                (entries["baseline"], entries[condition])
+                for (__, row_format), entries in grouped.items()
+                if row_format == answer_format and {"baseline", condition} <= set(entries)
+            ]
+            if not pairs:
+                continue
+            counts = Counter()
+            for baseline, aided in pairs:
+                before, after = bool(baseline.get("score")), bool(aided.get("score"))
+                outcome = (
+                    "unchanged_correct" if before and after
+                    else "worsened" if before
+                    else "improved" if after
+                    else "unchanged_wrong"
+                )
+                counts[outcome] += 1
+            total = len(pairs)
+            baseline_accuracy = sum(float(before.get("score", 0.0)) for before, __ in pairs) / total
+            condition_accuracy = sum(float(after.get("score", 0.0)) for __, after in pairs) / total
+            output.append(
+                {
+                    "experiment_condition": condition,
+                    "answer_format": answer_format,
+                    "paired_count": total,
+                    "baseline_accuracy": baseline_accuracy,
+                    "condition_accuracy": condition_accuracy,
+                    "accuracy_gain": condition_accuracy - baseline_accuracy,
+                    **{name: counts[name] / total for name in ("improved", "worsened", "unchanged_correct", "unchanged_wrong")},
+                }
+            )
     return output
 
 
@@ -257,17 +308,46 @@ def main() -> int:
     if full:
         tables["full_map_inversion"] = grouped_means(full, ("experiment_condition", "mapping_format"), ("mapping_edge_accuracy", "mapping_exact_accuracy", "parse_success"))
         _grouped_bar(tables["full_map_inversion"], "experiment_condition", "mapping_format", "mapping_edge_accuracy", MAPPING_COLORS, "Full-Map Inversion Edge Accuracy", output / "full_map_inversion.png")
-    for experiment in ("arrow_length_sweep", "map_ablation"):
+    for experiment in ("arrow_length_sweep", "map_ablation", "binary_axis", "oracle_ladder"):
         rows = submissions.get(experiment, [])
         if not rows:
             continue
         tables[experiment] = grouped_means(rows, ("experiment_condition", "answer_format"), ("score", "parse_success"))
+        if experiment == "binary_axis":
+            for row in tables[experiment]:
+                row["chance_adjusted_accuracy"] = 2.0 * row["score"] - 1.0
         tables[f"{experiment}_by_relation"] = grouped_means(rows, ("experiment_condition", "answer_format", "relation"), ("score",))
         tables[f"{experiment}_paired"] = paired_outcomes(rows)
         if experiment == "arrow_length_sweep":
             plot_arrow(rows, output)
-        else:
+        elif experiment == "map_ablation":
             _grouped_bar(tables[experiment], "experiment_condition", "answer_format", "score", FORMAT_COLORS, "Canonical-Map Ablation Accuracy", output / "map_ablation_accuracy.png")
+        elif experiment == "binary_axis":
+            _grouped_bar(tables[experiment], "experiment_condition", "answer_format", "score", FORMAT_COLORS, "Binary-Axis Accuracy", output / "binary_axis_accuracy.png")
+        else:
+            tables["oracle_ladder_transitions"] = oracle_transitions(rows)
+            order = {
+                name: index
+                for index, name in enumerate(
+                    (
+                        "baseline",
+                        "reference_localized",
+                        "heading_given",
+                        "axes_given",
+                        "intermediate_oracle",
+                        "spatial_map_oracle",
+                        "answer_text_oracle",
+                        "answer_letter_oracle",
+                    )
+                )
+            }
+            ordered = sorted(tables[experiment], key=lambda row: (order.get(row["experiment_condition"], 999), row["answer_format"]))
+            tables[experiment] = ordered
+            tables["oracle_ladder_transitions"] = sorted(
+                tables["oracle_ladder_transitions"],
+                key=lambda row: (order.get(row["experiment_condition"], 999), row["answer_format"]),
+            )
+            _grouped_bar(ordered, "experiment_condition", "answer_format", "score", FORMAT_COLORS, "Oracle-Ladder Accuracy", output / "oracle_ladder_accuracy.png")
     permutation = submissions.get("option_permutation", [])
     if permutation:
         groups = permutation_groups(permutation)

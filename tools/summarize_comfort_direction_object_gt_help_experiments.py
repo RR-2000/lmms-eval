@@ -35,7 +35,6 @@ from plot_comfort_direction_object_distributions import (
     serialise,
 )
 
-
 DEFAULT_ROOT = Path("/home/ramanathan/VLM/lmms-eval/outputs/" "comforter_comfort_direction_object_gt_help_all_variants_debug")
 MODE_LABELS = {
     "0": "baseline",
@@ -153,7 +152,9 @@ def discover_submissions(root: Path, expected_modes: Iterable[str] | None = None
     """Find one wrapped task submission per mode and report absent modes."""
     if not root.is_dir():
         raise FileNotFoundError(f"Experiment root not found: {root}")
-    candidates = sorted(path for path in root.rglob("*.json") if path.parent.name == "submissions" and path.name.startswith("comfort_direction_object_gt_help_"))
+    candidates = sorted(
+        path for path in root.rglob("*.json") if path.parent.name == "submissions" and path.name.startswith("comfort_direction_object_gt_help_")
+    )
     expected = set(expected_modes) if expected_modes is not None else None
     by_mode: dict[str, list[Path]] = {}
     for path in candidates:
@@ -167,7 +168,9 @@ def discover_submissions(root: Path, expected_modes: Iterable[str] | None = None
 
     duplicates = {mode: paths for mode, paths in by_mode.items() if len(paths) > 1}
     if duplicates:
-        details = "\n".join(f"  mode {mode}: " + ", ".join(str(path) for path in paths) for mode, paths in sorted(duplicates.items(), key=lambda item: _mode_sort_key(item[0])))
+        details = "\n".join(
+            f"  mode {mode}: " + ", ".join(str(path) for path in paths) for mode, paths in sorted(duplicates.items(), key=lambda item: _mode_sort_key(item[0]))
+        )
         raise ValueError("Multiple submissions were found for a mode. Use repeated " f"--submission MODE=PATH to select explicitly:\n{details}")
     submissions = {mode: paths[0] for mode, paths in by_mode.items()}
     checked_modes = list(expected_modes) if expected_modes is not None else list(MODE_LABELS)
@@ -286,7 +289,11 @@ def format_summary(summary: dict[str, Any]) -> str:
     lines = [
         "COMFORT direction/object GT-help experiment summary",
         "",
-        (f"{'mode':<5} {'aid':<23} {'records':>8} {'overall':>9} " f"{'direction':>10} {'object':>9} {'parse':>9} {'dir-p':>8} " f"{'obj-p':>8} {'obj-dir':>9} {'delta(0)':>9}"),
+        (
+            f"{'mode':<5} {'aid':<23} {'records':>8} {'overall':>9} "
+            f"{'direction':>10} {'object':>9} {'parse':>9} {'dir-p':>8} "
+            f"{'obj-p':>8} {'obj-dir':>9} {'delta(0)':>9}"
+        ),
         "-" * 125,
     ]
     comparisons = summary["comparisons_to_mode_0"]
@@ -396,7 +403,12 @@ def format_markdown(summary: dict[str, Any]) -> str:
         ]
     )
     for row in csv_rows:
-        lines.append(f"| {row['mode']} | {row['both_correct']:.1%} | " f"{row['object_correct_direction_wrong']:.1%} | " f"{row['direction_correct_object_wrong']:.1%} | " f"{row['both_wrong']:.1%} |")
+        lines.append(
+            f"| {row['mode']} | {row['both_correct']:.1%} | "
+            f"{row['object_correct_direction_wrong']:.1%} | "
+            f"{row['direction_correct_object_wrong']:.1%} | "
+            f"{row['both_wrong']:.1%} |"
+        )
 
     if summary["missing_expected_modes"]:
         lines.extend(
@@ -710,16 +722,19 @@ def save_summary(
     json_path = output_dir / f"{OUTPUT_STEM}.json"
     text_path = output_dir / f"{OUTPUT_STEM}.txt"
     markdown_path = output_dir / f"{OUTPUT_STEM}.md"
+    summary_markdown_path = output_dir / "summary.md"
     csv_path = output_dir / f"{OUTPUT_STEM}.csv"
     json_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     text_path.write_text(format_summary(summary), encoding="utf-8")
-    markdown_path.write_text(format_markdown(summary), encoding="utf-8")
+    markdown_report = format_markdown(summary)
+    markdown_path.write_text(markdown_report, encoding="utf-8")
+    summary_markdown_path.write_text(markdown_report, encoding="utf-8")
     rows = _csv_rows(summary)
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    artifacts = [json_path, text_path, markdown_path, csv_path]
+    artifacts = [json_path, text_path, markdown_path, summary_markdown_path, csv_path]
     if plot:
         plot_path = output_dir / f"{OUTPUT_STEM}_accuracy.png"
         save_accuracy_plot(summary, plot_path)
