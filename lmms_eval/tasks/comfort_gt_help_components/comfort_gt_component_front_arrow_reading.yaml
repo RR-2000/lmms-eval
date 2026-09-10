@@ -1,0 +1,3 @@
+task: comfort_gt_component_front_arrow_reading
+include: _classification_template_yaml
+process_docs: !function utils.process_front_arrow_reading_docs

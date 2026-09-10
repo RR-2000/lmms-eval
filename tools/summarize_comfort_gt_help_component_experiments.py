@@ -20,16 +20,48 @@ TASK_INFO = {
     "comfort_gt_component_bbox_naming": ("Localization", "Name boxed object", "accuracy"),
     "comfort_gt_component_facing_direction": ("Orientation", "8-way facing", "accuracy"),
     "comfort_gt_component_front_arrow": ("Orientation", "Predict front arrow", "arrow_cosine"),
+    "comfort_gt_component_front_arrow_reading": ("Orientation", "Read supplied front arrow", "accuracy"),
     "comfort_gt_component_left_arrow": ("Orientation", "Predict left arrow", "arrow_cosine"),
+    "comfort_gt_component_left_arrow_reading": ("Orientation", "Read supplied left arrow", "accuracy"),
     "comfort_gt_component_symbol_to_object": ("Symbol mapping", "Symbol to object", "accuracy"),
     "comfort_gt_component_object_to_symbol": ("Symbol mapping", "Object to symbol", "accuracy"),
     "comfort_gt_component_long_arrow_to_symbol": ("Symbol mapping", "Long arrows to symbol", "accuracy"),
     "comfort_gt_component_short_arrow_to_symbol": ("Symbol mapping", "Short arrows to symbol", "accuracy"),
     "comfort_gt_component_vector_to_direction": ("Vector semantics", "Vector to direction", "accuracy"),
     "comfort_gt_component_direction_to_vector": ("Vector semantics", "Direction to vector", "vector_cosine"),
+    "comfort_gt_component_projected_axes_prediction": ("Vector semantics", "Predict projected axes", "basis_mean_cosine"),
     "comfort_gt_component_text_axes_direction": ("Vector semantics", "Text axes applied", "accuracy"),
     "comfort_gt_component_overlay_axes_direction": ("Vector semantics", "Overlay axes applied", "accuracy"),
 }
+
+TASK_ROLES = {
+    "comfort_gt_component_bbox_prediction": ("BBox", "generation"),
+    "comfort_gt_component_bbox_naming": ("BBox", "utilization"),
+    "comfort_gt_component_facing_direction": ("Orientation label", "generation"),
+    "comfort_gt_component_front_arrow": ("Front arrow", "generation"),
+    "comfort_gt_component_front_arrow_reading": ("Front arrow", "utilization"),
+    "comfort_gt_component_left_arrow": ("Left arrow", "generation"),
+    "comfort_gt_component_left_arrow_reading": ("Left arrow", "utilization"),
+    "comfort_gt_component_symbol_to_object": ("Abstract symbols", "utilization"),
+    "comfort_gt_component_object_to_symbol": ("Abstract symbols", "generation"),
+    "comfort_gt_component_long_arrow_to_symbol": ("Long direction arrows", "utilization"),
+    "comfort_gt_component_short_arrow_to_symbol": ("Short direction arrows", "utilization"),
+    "comfort_gt_component_vector_to_direction": ("Direction vector", "utilization"),
+    "comfort_gt_component_direction_to_vector": ("Direction vector", "generation"),
+    "comfort_gt_component_projected_axes_prediction": ("Projected axes", "generation"),
+    "comfort_gt_component_text_axes_direction": ("Projected axes (text)", "utilization"),
+    "comfort_gt_component_overlay_axes_direction": ("Projected axes (overlay)", "utilization"),
+}
+
+PAIR_SPECS = (
+    ("BBox", "comfort_gt_component_bbox_prediction", "comfort_gt_component_bbox_naming"),
+    ("Front arrow", "comfort_gt_component_front_arrow", "comfort_gt_component_front_arrow_reading"),
+    ("Left arrow", "comfort_gt_component_left_arrow", "comfort_gt_component_left_arrow_reading"),
+    ("Abstract symbols", "comfort_gt_component_object_to_symbol", "comfort_gt_component_symbol_to_object"),
+    ("Direction vector", "comfort_gt_component_direction_to_vector", "comfort_gt_component_vector_to_direction"),
+    ("Projected axes → text use", "comfort_gt_component_projected_axes_prediction", "comfort_gt_component_text_axes_direction"),
+    ("Projected axes → overlay use", "comfort_gt_component_projected_axes_prediction", "comfort_gt_component_overlay_axes_direction"),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,11 +140,15 @@ def summarize_one(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "accuracy", "raw_accuracy", "parse_success", "bbox_iou", "bbox_acc_0_5",
         "arrow_cosine", "arrow_angle_30_accuracy", "arrow_start_score",
         "vector_cosine", "vector_angle_30_accuracy", "vector_full_sign_accuracy",
+        "basis_mean_cosine", "basis_all_angle_30_accuracy",
     )
+    component, component_role = TASK_ROLES[task]
     result = {
         "task": task,
         "capability": capability,
         "label": label,
+        "component": component,
+        "component_role": component_role,
         "model": model_name(task, path),
         "submission": str(path),
         "num_records": len(rows),
@@ -166,11 +202,11 @@ def fmt(value) -> str:
 def write_markdown(path: Path, summaries: list[dict[str, Any]]) -> None:
     lines = [
         "# COMFORT GT_HELP component results", "",
-        "| Capability | Diagnostic | Model | N | Primary metric | Score | Raw accuracy | Parse success |",
-        "|---|---|---|---:|---|---:|---:|---:|",
+        "| Capability | Component | Role | Diagnostic | Model | N | Primary metric | Score | Raw accuracy | Parse success |",
+        "|---|---|---|---|---|---:|---|---:|---:|---:|",
     ]
     for row in summaries:
-        lines.append(f"| {row['capability']} | {row['label']} | {row['model']} | {row['num_records']} | {row['primary_field']} | {fmt(row['primary_score'])} | {fmt(row['raw_accuracy'])} | {fmt(row['parse_success'])} |")
+        lines.append(f"| {row['capability']} | {row['component']} | {row['component_role']} | {row['label']} | {row['model']} | {row['num_records']} | {row['primary_field']} | {fmt(row['primary_score'])} | {fmt(row['raw_accuracy'])} | {fmt(row['parse_success'])} |")
     lines.extend([
         "", "## Recommended paired comparisons", "",
         "- BBox prediction vs name-boxed-object: producing versus consuming localization.",
@@ -179,8 +215,68 @@ def write_markdown(path: Path, summaries: list[dict[str, Any]]) -> None:
         "- Long vs short arrows: isolated GT_HELP 6 versus GT_HELP 36 cue-length effect.",
         "- Vector-to-direction vs direction-to-vector: decoding versus encoding axis semantics.",
         "- Text axes vs overlay axes: numeric versus visual use of the same projected basis.",
+        "", "## Generation versus utilization", "",
+        "All paired bars use the common binary `raw_accuracy`: IoU ≥ 0.5 for boxes, angular error ≤ 30° for arrows/vectors/axes, and exact match for classification. This makes the pair readable, while the primary metrics above retain finer-grained performance.",
     ])
+    pairs = generation_utilization_rows(summaries)
+    if pairs:
+        lines.extend((
+            "",
+            "| Component pair | Model | Generation | Utilization | Use−generation |",
+            "|---|---|---:|---:|---:|",
+        ))
+        for row in pairs:
+            delta = row["utilization_accuracy"] - row["generation_accuracy"]
+            lines.append(
+                f"| {row['pair']} | {row['model']} | {fmt(row['generation_accuracy'])} | "
+                f"{fmt(row['utilization_accuracy'])} | {100.0 * delta:+.2f} pp |"
+            )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def generation_utilization_rows(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    models = sorted({row["model"] for row in summaries})
+    for model in models:
+        by_task = {row["task"]: row for row in summaries if row["model"] == model}
+        for pair, generation_task, utilization_task in PAIR_SPECS:
+            generation = by_task.get(generation_task)
+            utilization = by_task.get(utilization_task)
+            if not generation or not utilization:
+                continue
+            if generation["raw_accuracy"] is None or utilization["raw_accuracy"] is None:
+                continue
+            rows.append({
+                "pair": pair,
+                "model": model,
+                "generation_task": generation_task,
+                "utilization_task": utilization_task,
+                "generation_accuracy": float(generation["raw_accuracy"]),
+                "utilization_accuracy": float(utilization["raw_accuracy"]),
+            })
+    return rows
+
+
+def plot_generation_utilization(path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    labels = [f"{row['pair']} · {row['model']}" for row in rows]
+    y = list(range(len(rows)))
+    height = max(5.0, 0.55 * len(rows) + 1.5)
+    fig, ax = plt.subplots(figsize=(12, height))
+    bar_height = 0.36
+    ax.barh([value - bar_height / 2 for value in y], [row["generation_accuracy"] for row in rows], height=bar_height, label="Generate component", color="#457B9D")
+    ax.barh([value + bar_height / 2 for value in y], [row["utilization_accuracy"] for row in rows], height=bar_height, label="Use component", color="#E9C46A")
+    ax.set_yticks(y, labels)
+    ax.invert_yaxis()
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel("Raw accuracy")
+    ax.set_title("COMFORT component generation versus utilization")
+    ax.grid(axis="x", alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_primary(path: Path, summaries: list[dict[str, Any]]) -> None:
@@ -264,10 +360,13 @@ def main() -> None:
     (output / "summary.json").write_text(json.dumps({"experiments": summaries, "answer_breakdown": breakdown}, indent=2) + "\n", encoding="utf-8")
     write_csv(output / "summary.csv", summaries)
     write_csv(output / "answer_breakdown.csv", breakdown)
+    pair_rows = generation_utilization_rows(summaries)
+    write_csv(output / "generation_vs_utilization.csv", pair_rows)
     write_markdown(output / "summary.md", summaries)
     plot_primary(output / "primary_scores.png", summaries)
     plot_raw_accuracy(output / "raw_accuracy.png", summaries)
     plot_comparisons(output / "representation_comparisons.png", summaries)
+    plot_generation_utilization(output / "generation_vs_utilization.png", pair_rows)
     print(f"Analyzed {len(paths)} submissions; wrote results to {output}")
 
 

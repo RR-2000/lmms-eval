@@ -1,0 +1,4 @@
+group: scannet_basis_object_direction
+task:
+  - scannet_camera_basis_object_direction
+  - scannet_object_basis_object_direction

@@ -60,6 +60,29 @@ LABEL_ALIASES = {
     "car sedan": "car",
 }
 
+# These labels are copied into every submission row so analysis can compare
+# producing a scaffold with consuming the same scaffold.  "generation" means
+# emitting the representation; "utilization" means receiving it and decoding
+# or applying it to another question.
+COMPONENT_ROLES = {
+    "comfort_gt_component_bbox_prediction": ("bbox", "generation"),
+    "comfort_gt_component_bbox_naming": ("bbox", "utilization"),
+    "comfort_gt_component_facing_direction": ("orientation_label", "generation"),
+    "comfort_gt_component_front_arrow": ("front_arrow", "generation"),
+    "comfort_gt_component_front_arrow_reading": ("front_arrow", "utilization"),
+    "comfort_gt_component_left_arrow": ("left_arrow", "generation"),
+    "comfort_gt_component_left_arrow_reading": ("left_arrow", "utilization"),
+    "comfort_gt_component_symbol_to_object": ("abstract_symbol", "utilization"),
+    "comfort_gt_component_object_to_symbol": ("abstract_symbol", "generation"),
+    "comfort_gt_component_long_arrow_to_symbol": ("long_direction_arrows", "utilization"),
+    "comfort_gt_component_short_arrow_to_symbol": ("short_direction_arrows", "utilization"),
+    "comfort_gt_component_vector_to_direction": ("direction_vector", "utilization"),
+    "comfort_gt_component_direction_to_vector": ("direction_vector", "generation"),
+    "comfort_gt_component_projected_axes_prediction": ("projected_axes", "generation"),
+    "comfort_gt_component_text_axes_direction": ("projected_axes_text", "utilization"),
+    "comfort_gt_component_overlay_axes_direction": ("projected_axes_overlay", "utilization"),
+}
+
 
 def _display_label(value) -> str:
     """Return the human-facing class name used in prompts and evaluation."""
@@ -209,10 +232,13 @@ def _base_scenes(dataset: Dataset):
 
 
 def _record(base: dict, task: str, qid_suffix: str, **values) -> dict:
+    component_name, component_role = COMPONENT_ROLES.get(task, ("unclassified", "unclassified"))
     return {
         "qid": f"{base['scene_id']}::{qid_suffix}",
         "index": f"{base['scene_id']}::{qid_suffix}",
         "diagnostic_task": task,
+        "component_name": component_name,
+        "component_role": component_role,
         "scene_id": base["scene_id"],
         "img_path": base["img_path"],
         "reference_object": base["reference_label"],
@@ -318,6 +344,37 @@ def process_left_arrow_docs(dataset: Dataset) -> Dataset:
     return _process_arrow_docs(dataset, "left")
 
 
+def _process_arrow_reading_docs(dataset: Dataset, direction: str) -> Dataset:
+    """Supply a gold overlay and ask the model to read its screen direction."""
+    task = f"comfort_gt_component_{direction}_arrow_reading"
+    records = []
+    for base in _base_scenes(dataset):
+        gold = _compass_label(base["basis_screen_directions"][direction])
+        records.append(_record(
+            base,
+            task,
+            f"{direction}_arrow_reading",
+            visual_mode="single_axis_arrow",
+            overlay_axis=direction,
+            gold_answer=gold,
+            answer_choices=list(COMPASS_DIRECTIONS),
+            prompt=(
+                f"The reference {base['reference_label']} is boxed. The overlaid arrow shows the "
+                f"object's ground-truth {direction} axis. In which image-plane direction does the "
+                "arrow point? Return exactly one of: " + ", ".join(COMPASS_DIRECTIONS) + "."
+            ),
+        ))
+    return _finish(records, task)
+
+
+def process_front_arrow_reading_docs(dataset: Dataset) -> Dataset:
+    return _process_arrow_reading_docs(dataset, "front")
+
+
+def process_left_arrow_reading_docs(dataset: Dataset) -> Dataset:
+    return _process_arrow_reading_docs(dataset, "left")
+
+
 def process_symbol_to_object_docs(dataset: Dataset) -> Dataset:
     task = "comfort_gt_component_symbol_to_object"
     records = []
@@ -419,6 +476,31 @@ def process_direction_to_vector_docs(dataset: Dataset) -> Dataset:
                         f"Give the unit vector for {direction}. Return only JSON as "
                         '{"front": <float>, "up": <float>, "right": <float>}.'),
             ))
+    return _finish(records, task)
+
+
+def process_projected_axes_prediction_docs(dataset: Dataset) -> Dataset:
+    """Generate the three 2D axes later consumed by text/overlay tasks."""
+    task = "comfort_gt_component_projected_axes_prediction"
+    records = []
+    for base in _base_scenes(dataset):
+        target = {
+            axis: [float(value) for value in base["basis_screen_directions"][axis]]
+            for axis in AXES
+        }
+        records.append(_record(
+            base,
+            task,
+            "projected_axes_prediction",
+            visual_mode="boxed_reference",
+            gt_basis_screen=target,
+            prompt=(
+                f"The reference {base['reference_label']} is boxed. Predict its screen-projected "
+                "front, up, and right unit directions in image coordinates, where x points right "
+                "and y points down. Return only JSON as "
+                '{"front": [dx, dy], "up": [dx, dy], "right": [dx, dy]}.'
+            ),
+        ))
     return _finish(records, task)
 
 
@@ -549,6 +631,14 @@ def doc_to_visual(doc):
         length = max(30.0, 0.8 * math.hypot(x2 - x1, y2 - y1))
         for direction in ("front", "up", "right"):
             _draw_arrow(image, start, doc["basis_screen_directions"][direction], length, direction)
+    elif mode == "single_axis_arrow":
+        reference = _reference_render(doc)
+        _draw_box(image, reference, "REF")
+        x1, y1, x2, y2 = _bbox_pixels(reference["bbox"], image)
+        start = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+        length = max(30.0, 0.8 * math.hypot(x2 - x1, y2 - y1))
+        axis = str(doc["overlay_axis"])
+        _draw_arrow(image, start, doc["basis_screen_directions"][axis], length, axis)
     else:
         raise ValueError(f"Unknown visual mode {mode!r}")
     return [image]
@@ -566,6 +656,8 @@ def doc_to_target(doc):
         return json.dumps({"start": doc["gt_arrow_start"], "end": doc["gt_arrow_end"]})
     if "gt_vector" in doc:
         return json.dumps(doc["gt_vector"])
+    if "gt_basis_screen" in doc:
+        return json.dumps(doc["gt_basis_screen"])
     return str(doc.get("gold_answer", ""))
 
 
@@ -617,6 +709,25 @@ def parse_arrow(text: str) -> Optional[dict[str, list[float]]]:
     if start is None or end is None or math.dist(start, end) <= EPSILON:
         return None
     return {"start": start, "end": end}
+
+
+def parse_projected_axes(text: str) -> Optional[dict[str, list[float]]]:
+    payload = _extract_json(text)
+    if not isinstance(payload, dict):
+        return None
+    parsed = {}
+    for axis in AXES:
+        value = payload.get(axis)
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            return None
+        try:
+            vector = [float(value[0]), float(value[1])]
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(component) for component in vector) or math.hypot(*vector) <= EPSILON:
+            return None
+        parsed[axis] = vector
+    return parsed
 
 
 def _mean(values) -> float:
@@ -682,8 +793,43 @@ def process_vector_results(doc, results):
     return _outputs(entry, ("component_vector_cosine", "component_vector_angle_30_accuracy", "component_vector_full_sign_accuracy", "component_raw_accuracy", "component_parse_success"), doc)
 
 
+def process_projected_axes_results(doc, results):
+    prediction = results[0].strip() if results else ""
+    parsed = parse_projected_axes(prediction)
+    cosines = {axis: 0.0 for axis in AXES}
+    if parsed is not None:
+        for axis in AXES:
+            predicted = _unit_xy(tuple(parsed[axis]))
+            target = _unit_xy(tuple(doc["gt_basis_screen"][axis]))
+            cosines[axis] = predicted[0] * target[0] + predicted[1] * target[1]
+    mean_cosine = _mean(cosines.values())
+    all_accurate = float(parsed is not None and all(value >= math.cos(math.radians(30.0)) for value in cosines.values()))
+    entry = _common_entry(
+        doc,
+        prediction,
+        parsed_answer=parsed,
+        parse_success=float(parsed is not None),
+        basis_mean_cosine=mean_cosine,
+        basis_all_angle_30_accuracy=all_accurate,
+        front_axis_cosine=cosines["front"],
+        up_axis_cosine=cosines["up"],
+        right_axis_cosine=cosines["right"],
+        raw_accuracy=all_accurate,
+    )
+    return _outputs(
+        entry,
+        (
+            "component_basis_mean_cosine",
+            "component_basis_all_angle_30_accuracy",
+            "component_raw_accuracy",
+            "component_parse_success",
+        ),
+        doc,
+    )
+
+
 def _common_entry(doc: dict, prediction: str, **scores) -> dict:
-    keys = ("qid", "scene_id", "diagnostic_task", "reference_object", "object_id", "object_label", "query_object", "query_symbol", "query_direction", "gold_answer", "gt_bbox", "gt_arrow_start", "gt_arrow_end", "gt_arrow_direction", "gt_vector", "input_vector", "visual_mode")
+    keys = ("qid", "scene_id", "diagnostic_task", "component_name", "component_role", "reference_object", "object_id", "object_label", "query_object", "query_symbol", "query_direction", "gold_answer", "gt_bbox", "gt_arrow_start", "gt_arrow_end", "gt_arrow_direction", "gt_vector", "gt_basis_screen", "input_vector", "visual_mode", "overlay_axis")
     return {**{key: doc.get(key) for key in keys if key in doc}, "prediction": prediction, **scores}
 
 
@@ -750,6 +896,14 @@ def aggregate_vector_angle_30_accuracy(results):
 
 def aggregate_vector_full_sign_accuracy(results):
     return _aggregate(results, "vector_full_sign_accuracy")
+
+
+def aggregate_basis_mean_cosine(results):
+    return _aggregate(results, "basis_mean_cosine")
+
+
+def aggregate_basis_all_angle_30_accuracy(results):
+    return _aggregate(results, "basis_all_angle_30_accuracy")
 
 
 def aggregate_results_for_submission(results, args):

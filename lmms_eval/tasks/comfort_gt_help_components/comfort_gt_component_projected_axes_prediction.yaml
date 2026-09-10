@@ -1,0 +1,3 @@
+task: comfort_gt_component_projected_axes_prediction
+include: _projected_axes_template_yaml
+process_docs: !function utils.process_projected_axes_prediction_docs

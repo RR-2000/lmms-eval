@@ -126,11 +126,17 @@ else
   skip_analysis "No COMFORT basis submissions were found"
 fi
 
-# 6. ScanNet camera/object basis tasks.
-if [[ -d "$OUTPUTS/scannet_basis_all_8/submissions" ]]; then
+# 6. ScanNet camera/object basis and paired object-vs-direction tasks.
+scannet_basis_inputs=()
+for root in \
+  "$OUTPUTS/scannet_basis_all_8" \
+  "$OUTPUTS/scannet_basis_object_direction_8"; do
+  [[ -d "$root/submissions" ]] && scannet_basis_inputs+=("$root")
+done
+if ((${#scannet_basis_inputs[@]})); then
   run_analysis "ScanNet basis tasks" \
     python tools/plot_scannet_basis_results.py \
-    --inputs "$OUTPUTS/scannet_basis_all_8" \
+    --inputs "${scannet_basis_inputs[@]}" \
     --output-dir "$OUTPUTS/scannet_basis_all_8/scannet_basis_analysis"
 else
   skip_analysis "ScanNet basis output is missing"
@@ -217,6 +223,12 @@ if [[ -n "$kubric_viewpoint_result" && -f "$kubric_viewpoint_submission" ]]; the
 else
   skip_analysis "Kubric object-centric viewpoint output is incomplete"
 fi
+
+# 13. Refresh the prompt/answer catalog from the actual submission records.
+run_analysis "Experiment prompt/answer catalog" \
+  python tools/build_conversation_experiments_readme.py \
+  --repo-root "$REPO_ROOT" \
+  --output "$OUTPUTS/EXPERIMENTS_README.md"
 
 echo
 echo "===== Analysis run complete ====="

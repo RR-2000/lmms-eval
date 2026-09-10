@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-direction_vector_diagnostics_scannet
+#PBS -N lmms-comfort_gt_help_components
 #PBS -l select=1:ncpus=4:ngpus=1:mem=24gb:host=cvml06
 
 # Activate the Conda environment
@@ -28,7 +28,7 @@ conda activate lmms
 # comfort_multi_3d_object_basis, comfort_multi_3d_camera_basis
 # comfort_multi_3d_basis_object_direction
 # comfort_gt_help_components
-# scannet_basis_all
+# scannet_basis_all, scannet_basis_object_direction
 # comfort_full_map_inversion comfort_arrow_length_sweep comfort_map_ablation comfort_option_permutation
 # direction_vector_diagnostics_comfort, direction_vector_diagnostics_kubric, direction_vector_diagnostics_scannet
 
@@ -47,10 +47,10 @@ conda activate lmms
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-8B-Instruct" \
-  --tasks direction_vector_diagnostics_scannet \
+  --tasks comfort_gt_help_components \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/direction_vector_diagnostics_scannet_8
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/comfort_gt_help_components_8
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_direct_answer_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0

@@ -18,7 +18,7 @@ from matplotlib.ticker import PercentFormatter
 DEFAULT_INPUT = Path("/home/ramanathan/VLM/lmms-eval/outputs/scannet_basis_all_8")
 OUTPUT_DIR_NAME = "scannet_basis_analysis"
 FILE_PREFIXES = ("scannet_camera_basis_", "scannet_object_basis_")
-FORMATS = ("direction", "vector", "combined")
+FORMATS = ("direction", "vector", "combined", "object_direction")
 FRAME_ORDER = ("camera", "object_facing_camera")
 FRAME_LABELS = {
     "camera": "Camera frame",
@@ -39,6 +39,11 @@ METRICS = (
     "direction_parse_success",
     "vector_parse_success",
     "combined_parse_success",
+    "format_accuracy",
+    "object_answer_accuracy",
+    "direction_answer_accuracy",
+    "object_minus_direction",
+    "format_parse_success",
 )
 METRIC_LABELS = {
     "raw_accuracy": "Raw accuracy",
@@ -54,6 +59,11 @@ METRIC_LABELS = {
     "direction_parse_success": "Direction parsed",
     "vector_parse_success": "Vector parsed",
     "combined_parse_success": "Both parsed",
+    "format_accuracy": "Paired-format accuracy",
+    "object_answer_accuracy": "Object-answer accuracy",
+    "direction_answer_accuracy": "Direction-answer accuracy",
+    "object_minus_direction": "Object minus direction",
+    "format_parse_success": "Paired-format parsed",
 }
 
 PRIMARY_OUTCOMES = ("success", "incorrect", "parse_failure")
@@ -85,6 +95,21 @@ COMBINED_COLORS = {
     "both_correct": "#2A9D8F",
     "direction_correct_vector_wrong": "#E9C46A",
     "direction_wrong_vector_correct": "#F4A261",
+    "both_wrong": "#E76F51",
+    "parse_failure": "#6C757D",
+}
+PAIR_OUTCOMES = ("both_correct", "object_only_correct", "direction_only_correct", "both_wrong", "parse_failure")
+PAIR_LABELS = {
+    "both_correct": "Object + direction correct",
+    "object_only_correct": "Object correct, direction wrong",
+    "direction_only_correct": "Direction correct, object wrong",
+    "both_wrong": "Object + direction wrong",
+    "parse_failure": "Either answer failed to parse",
+}
+PAIR_COLORS = {
+    "both_correct": "#2A9D8F",
+    "object_only_correct": "#E9C46A",
+    "direction_only_correct": "#F4A261",
     "both_wrong": "#E76F51",
     "parse_failure": "#6C757D",
 }
@@ -216,18 +241,45 @@ def summarize(path: Path, metadata: dict[str, Any], rows: list[dict[str, Any]]) 
             "full_sign_accuracy",
             "vector_parse_success",
         },
-        "combined": set(METRICS) - {"raw_accuracy"},
+        "combined": set(METRICS) - {
+            "raw_accuracy", "format_accuracy", "object_answer_accuracy",
+            "direction_answer_accuracy", "object_minus_direction",
+            "format_parse_success",
+        },
+        "object_direction": set(),
     }[prediction_format]
     result.update({metric: mean(rows, metric) for metric in applicable})
-    result["raw_accuracy"] = {
-        "direction": result["direction_accuracy"],
-        "vector": result["vector_dominant_direction_accuracy"],
-        "combined": mean(rows, "both_correct"),
-    }[prediction_format]
+    if prediction_format == "object_direction":
+        object_rows = [row for row in rows if row.get("answer_format") == "object"]
+        direction_rows = [row for row in rows if row.get("answer_format") == "direction"]
+        if not object_rows or not direction_rows:
+            raise ValueError(f"Object/direction submission lacks both answer formats: {path}")
+        object_accuracy = mean(object_rows, "answer_accuracy")
+        direction_accuracy = mean(direction_rows, "answer_accuracy")
+        result.update({
+            "num_object_answers": len(object_rows),
+            "num_direction_answers": len(direction_rows),
+            "format_accuracy": mean(rows, "answer_accuracy"),
+            "object_answer_accuracy": object_accuracy,
+            "direction_answer_accuracy": direction_accuracy,
+            "object_minus_direction": object_accuracy - direction_accuracy,
+            "format_parse_success": mean(rows, "parse_success"),
+            "raw_accuracy": mean(rows, "answer_accuracy"),
+        })
+    else:
+        result["raw_accuracy"] = {
+            "direction": result["direction_accuracy"],
+            "vector": result["vector_dominant_direction_accuracy"],
+            "combined": mean(rows, "both_correct"),
+        }[prediction_format]
     return result
 
 
 def primary_outcome(row: dict[str, Any], prediction_format: str) -> str:
+    if prediction_format == "object_direction":
+        if not row.get("parse_success"):
+            return "parse_failure"
+        return "success" if row.get("answer_accuracy") else "incorrect"
     if prediction_format == "direction":
         if not row.get("direction_parse_success"):
             return "parse_failure"
@@ -323,6 +375,82 @@ def plot_combined_outcomes(experiments: list[dict[str, Any]], output_dir: Path) 
     )
 
 
+def _paired_format_rows(rows: list[dict[str, Any]]) -> list[dict[str, float]]:
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("pair_id")), {})[str(row.get("answer_format"))] = row
+    pairs = []
+    for pair in grouped.values():
+        if not {"object", "direction"} <= set(pair):
+            continue
+        pairs.append({
+            "parse_success": float(bool(pair["object"].get("parse_success")) and bool(pair["direction"].get("parse_success"))),
+            "object_correct": float(pair["object"].get("answer_accuracy", 0.0)),
+            "direction_correct": float(pair["direction"].get("answer_accuracy", 0.0)),
+        })
+    return pairs
+
+
+def pair_outcome(row: dict[str, Any], _: str) -> str:
+    if not row.get("parse_success"):
+        return "parse_failure"
+    object_correct = bool(row.get("object_correct"))
+    direction_correct = bool(row.get("direction_correct"))
+    if object_correct and direction_correct:
+        return "both_correct"
+    if object_correct:
+        return "object_only_correct"
+    if direction_correct:
+        return "direction_only_correct"
+    return "both_wrong"
+
+
+def plot_object_direction_outcomes(experiments: list[dict[str, Any]], output_dir: Path) -> Path | None:
+    paired = [item for item in experiments if item["summary"]["prediction_format"] == "object_direction"]
+    if not paired:
+        return None
+    groups = [
+        (item["summary"]["label"], _paired_format_rows(item["rows"]), "object_direction")
+        for item in paired
+    ]
+    return _stacked_plot(
+        groups, PAIR_OUTCOMES, PAIR_LABELS, PAIR_COLORS, pair_outcome,
+        "ScanNet Object-vs-Direction Paired Outcomes",
+        output_dir / "object_direction_outcomes_100pct.png",
+    )
+
+
+def plot_object_vs_direction_accuracy(summaries: list[dict[str, Any]], output_dir: Path) -> Path | None:
+    paired = [row for row in summaries if row["prediction_format"] == "object_direction"]
+    if not paired:
+        return None
+    x = list(range(len(paired)))
+    width = 0.34
+    fig, ax = plt.subplots(figsize=(max(8, 2.8 * len(paired)), 5.8))
+    object_scores = [float(row["object_answer_accuracy"]) for row in paired]
+    direction_scores = [float(row["direction_answer_accuracy"]) for row in paired]
+    bars = (
+        ax.bar([value - width / 2 for value in x], object_scores, width, label="Answer with object", color="#457B9D"),
+        ax.bar([value + width / 2 for value in x], direction_scores, width, label="Answer with direction", color="#E9C46A"),
+    )
+    for group in bars:
+        for bar in group:
+            value = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2, min(1.025, value + 0.018), f"{value:.1%}", ha="center", va="bottom", fontsize=9)
+    ax.set_xticks(x, [row["label"] for row in paired], rotation=12)
+    ax.set_ylim(0.0, 1.08)
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax.set_ylabel("Accuracy")
+    ax.set_title("ScanNet Answer-with-Object vs Answer-with-Direction Accuracy")
+    ax.grid(axis="y", alpha=0.2)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    path = output_dir / "object_vs_direction_accuracy.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
 def plot_raw_accuracy(summaries: list[dict[str, Any]], output_dir: Path) -> Path:
     labels = [row["label"] for row in summaries]
     values = [float(row["raw_accuracy"]) for row in summaries]
@@ -348,6 +476,7 @@ def plot_raw_accuracy(summaries: list[dict[str, Any]], output_dir: Path) -> Path
 
 
 def plot_metric_summary(summaries: list[dict[str, Any]], output_dir: Path) -> Path:
+    summaries = [row for row in summaries if row["prediction_format"] != "object_direction"]
     selected = (
         "direction_accuracy",
         "vector_dominant_direction_accuracy",
@@ -425,8 +554,8 @@ def write_tables(summaries: list[dict[str, Any]], output_dir: Path) -> list[Path
     lines = [
         "# ScanNet basis results",
         "",
-        "| Experiment | n | Raw accuracy | Direction | Vector dominant | Cosine | Within 30° | Full sign | Direction parsed | Vector parsed | Both parsed |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Experiment | n | Raw accuracy | Direction | Vector dominant | Cosine | Within 30° | Full sign | Direction parsed | Vector parsed | Both parsed | Object answer | Direction answer | Object−direction |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summaries:
         lines.append(
@@ -434,11 +563,47 @@ def write_tables(summaries: list[dict[str, Any]], output_dir: Path) -> list[Path
             f"{formatted(row['direction_accuracy'])} | {formatted(row['vector_dominant_direction_accuracy'])} | "
             f"{formatted(row['vector_cosine'])} | {formatted(row['vector_angle_30_accuracy'])} | "
             f"{formatted(row['full_sign_accuracy'])} | {formatted(row['direction_parse_success'])} | "
-            f"{formatted(row['vector_parse_success'])} | {formatted(row['combined_parse_success'])} |"
+            f"{formatted(row['vector_parse_success'])} | {formatted(row['combined_parse_success'])} | "
+            f"{formatted(row['object_answer_accuracy'])} | "
+            f"{formatted(row['direction_answer_accuracy'])} | {formatted(row['object_minus_direction'])} |"
         )
     markdown_path = output_dir / "summary.md"
     markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return [json_path, csv_path, markdown_path]
+
+
+def write_object_direction_report(summaries: list[dict[str, Any]], output_dir: Path) -> list[Path]:
+    paired = [row for row in summaries if row["prediction_format"] == "object_direction"]
+    if not paired:
+        return []
+    rows = [{
+        "experiment": row["label"],
+        "coordinate_frame": row["coordinate_frame"],
+        "num_object_answers": row["num_object_answers"],
+        "num_direction_answers": row["num_direction_answers"],
+        "object_answer_accuracy": row["object_answer_accuracy"],
+        "direction_answer_accuracy": row["direction_answer_accuracy"],
+        "object_minus_direction": row["object_minus_direction"],
+    } for row in paired]
+    csv_path = output_dir / "object_vs_direction_accuracy.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    md_path = output_dir / "object_vs_direction_accuracy.md"
+    lines = [
+        "# ScanNet object-answer vs direction-answer accuracy", "",
+        "| Experiment | Object n | Object accuracy | Direction n | Direction accuracy | Object−direction |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['experiment']} | {row['num_object_answers']} | {row['object_answer_accuracy']:.1%} | "
+            f"{row['num_direction_answers']} | {row['direction_answer_accuracy']:.1%} | "
+            f"{row['object_minus_direction']:+.1%} |"
+        )
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return [csv_path, md_path]
 
 
 def resolve_output_dir(inputs: list[Path], requested: Path | None) -> Path:
@@ -471,6 +636,7 @@ def main() -> int:
     output_dir = resolve_output_dir(args.inputs, args.output_dir)
     outputs = [
         *write_tables(summaries, output_dir),
+        *write_object_direction_report(summaries, output_dir),
         plot_raw_accuracy(summaries, output_dir),
         plot_metric_summary(summaries, output_dir),
         plot_primary_outcomes(experiments, output_dir),
@@ -479,6 +645,12 @@ def main() -> int:
     combined_path = plot_combined_outcomes(experiments, output_dir)
     if combined_path is not None:
         outputs.append(combined_path)
+    for output in (
+        plot_object_direction_outcomes(experiments, output_dir),
+        plot_object_vs_direction_accuracy(summaries, output_dir),
+    ):
+        if output is not None:
+            outputs.append(output)
     print(f"Loaded {len(experiments)} submissions ({sum(row['num_records'] for row in summaries)} records).")
     for output in outputs:
         print(output)

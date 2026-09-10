@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from datasets import Dataset
@@ -25,6 +25,10 @@ OBJECT_TASK_BY_FORMAT = {
     "direction": "scannet_object_basis_direction",
     "vector": "scannet_object_basis_vector",
     "combined": "scannet_object_basis_combined",
+}
+PAIR_TASK_BY_FRAME = {
+    "camera": "scannet_camera_basis_object_direction",
+    "object_facing_camera": "scannet_object_basis_object_direction",
 }
 
 
@@ -156,6 +160,112 @@ def process_object_combined_docs(dataset: Dataset) -> Dataset:
     return _process_docs(dataset, "combined", "object_facing_camera")
 
 
+def _process_object_direction_docs(dataset: Dataset, coordinate_frame: str) -> Dataset:
+    """Create balanced, matched answer-with-object/direction rows.
+
+    Only five-object views are retained, giving four candidate objects for
+    every reference and therefore the same four-way choice cardinality as the
+    direction vocabulary. A fact is retained only when its direction occurs
+    once among those four candidates, so the inverse object question has one
+    valid answer. Finally, relations are downsampled deterministically to make
+    left/right/front/back exactly balanced.
+    """
+    if coordinate_frame not in PAIR_TASK_BY_FRAME:
+        raise ValueError(f"Unknown ScanNet paired coordinate frame {coordinate_frame!r}")
+    base_docs = list(_process_docs(dataset, "direction", coordinate_frame))
+    by_reference = defaultdict(list)
+    for doc in base_docs:
+        key = (str(doc["scene_id"]), int(doc["frame_id"]), str(doc["reference_object_id"]))
+        by_reference[key].append(doc)
+
+    eligible = []
+    skipped = Counter()
+    for reference_docs in by_reference.values():
+        if len(reference_docs) != 4:
+            skipped["not_four_candidates"] += len(reference_docs)
+            continue
+        direction_counts = Counter(str(doc["gt_direction"]) for doc in reference_docs)
+        for doc in reference_docs:
+            if direction_counts[str(doc["gt_direction"])] != 1:
+                skipped["ambiguous_inverse_relation"] += 1
+                continue
+            eligible.append(doc)
+
+    by_direction = defaultdict(list)
+    for doc in eligible:
+        by_direction[str(doc["gt_direction"])].append(doc)
+    if set(by_direction) != set(basis.DIRECTIONS):
+        raise ValueError(f"ScanNet paired rows do not cover all directions: {sorted(by_direction)}")
+    per_direction = min(len(by_direction[direction]) for direction in basis.DIRECTIONS)
+    balanced = []
+    for direction in basis.DIRECTIONS:
+        ordered = sorted(by_direction[direction], key=lambda row: str(row["pair_id"]))
+        balanced.extend(ordered[:per_direction])
+        skipped["relation_balance_downsample"] += len(ordered) - per_direction
+    balanced.sort(key=lambda row: str(row["pair_id"]))
+
+    records = []
+    for source in balanced:
+        reference_key = (str(source["scene_id"]), int(source["frame_id"]), str(source["reference_object_id"]))
+        reference_docs = by_reference[reference_key]
+        candidates = [str(doc["target_object"]) for doc in reference_docs]
+        pair_id = f"{source['pair_id']}::{coordinate_frame}::object_direction"
+        if coordinate_frame == "camera":
+            perspective = "the camera's frame of reference"
+        else:
+            perspective = f"the {source['reference_object']}-centred frame while it looks back at the camera"
+        shared = {
+            **source,
+            "prediction_format": "object_direction",
+            "pair_id": pair_id,
+            "candidate_objects": candidates,
+        }
+        records.extend(
+            (
+                {
+                    **shared,
+                    "qid": f"{pair_id}::direction",
+                    "index": f"{pair_id}::direction",
+                    "answer_format": "direction",
+                    "gold_answer": source["gt_direction"],
+                    "question": (
+                        f"From {perspective}, where is the {source['target_object']} "
+                        f"relative to the {source['reference_object']}?"
+                    ),
+                },
+                {
+                    **shared,
+                    "qid": f"{pair_id}::object",
+                    "index": f"{pair_id}::object",
+                    "answer_format": "object",
+                    "gold_answer": source["target_object"],
+                    "question": (
+                        f"From {perspective}, which candidate object is "
+                        f"{source['gt_direction']} of the {source['reference_object']}?"
+                    ),
+                },
+            )
+        )
+    eval_logger.info(
+        "ScanNet {} object/direction task loaded {} balanced matched pairs "
+        "({} rows, {} per relation); skipped={}",
+        coordinate_frame,
+        len(records) // 2,
+        len(records),
+        per_direction,
+        dict(skipped),
+    )
+    return Dataset.from_list(records)
+
+
+def process_camera_basis_object_direction_docs(dataset: Dataset) -> Dataset:
+    return _process_object_direction_docs(dataset, "camera")
+
+
+def process_object_basis_object_direction_docs(dataset: Dataset) -> Dataset:
+    return _process_object_direction_docs(dataset, "object_facing_camera")
+
+
 # Parsing, visual loading, targets, scoring, and scalar aggregations are shared
 # with COMFORT because the output schema is deliberately identical.
 doc_to_visual = basis.doc_to_visual
@@ -177,6 +287,19 @@ aggregate_basis_both_correct = basis.aggregate_basis_both_correct
 aggregate_basis_direction_correct_vector_wrong = basis.aggregate_basis_direction_correct_vector_wrong
 aggregate_basis_direction_wrong_vector_correct = basis.aggregate_basis_direction_wrong_vector_correct
 aggregate_basis_both_wrong = basis.aggregate_basis_both_wrong
+process_object_direction_results = basis.process_object_direction_results
+aggregate_basis_format_accuracy = basis.aggregate_basis_format_accuracy
+aggregate_basis_object_answer_accuracy = basis.aggregate_basis_object_answer_accuracy
+aggregate_basis_direction_answer_accuracy = basis.aggregate_basis_direction_answer_accuracy
+aggregate_basis_object_minus_direction = basis.aggregate_basis_object_minus_direction
+aggregate_basis_format_switch_gain = basis.aggregate_basis_format_switch_gain
+aggregate_basis_format_parse_success = basis.aggregate_basis_format_parse_success
+aggregate_basis_object_parse_success = basis.aggregate_basis_object_parse_success
+aggregate_basis_pair_direction_parse_success = basis.aggregate_basis_pair_direction_parse_success
+aggregate_basis_object_correct_direction_wrong = basis.aggregate_basis_object_correct_direction_wrong
+aggregate_basis_direction_correct_object_wrong = basis.aggregate_basis_direction_correct_object_wrong
+aggregate_basis_pair_both_correct = basis.aggregate_basis_pair_both_correct
+aggregate_basis_pair_both_wrong = basis.aggregate_basis_pair_both_wrong
 
 
 def process_results(doc, results):
@@ -195,10 +318,28 @@ def process_results(doc, results):
 
 
 def doc_to_text(doc, lmms_eval_specific_kwargs=None):
-    if doc.get("coordinate_frame") == "camera":
+    if doc.get("coordinate_frame") == "camera" and doc.get("prediction_format") != "object_direction":
         return basis.doc_to_text(doc, lmms_eval_specific_kwargs)
     kwargs = lmms_eval_specific_kwargs or {}
     prediction_format = doc["prediction_format"]
+    if prediction_format == "object_direction":
+        if doc.get("coordinate_frame") == "camera":
+            frame_text = (
+                "Use the camera frame: right is camera/image-right and front follows "
+                "the camera viewing direction. Do not use an object's semantic facing direction."
+            )
+        else:
+            frame_text = (
+                f"Use the {doc['reference_object']}-centred anchor frame: imagine the reference "
+                "looking back at the camera; front points toward the camera and its own right "
+                "appears camera/image-left."
+            )
+        if doc["answer_format"] == "direction":
+            output_rule = "Return exactly one lowercase direction word: left, right, front, or back."
+        else:
+            candidates = ", ".join(str(item) for item in doc["candidate_objects"])
+            output_rule = f"Return exactly one object name from this four-object candidate list: {candidates}."
+        return f"{kwargs.get('pre_prompt', '')}{doc['question']}\n{frame_text}\n{output_rule}{kwargs.get('post_prompt', '')}"
     frame_text = (
         f"Use the {doc['reference_object']}-centred anchor frame, not camera/image axes: the reference is looking back at the camera, so positive front points from it toward the camera, positive up is world up, and positive right is its own right (camera/image left)."
     )
@@ -224,3 +365,24 @@ def aggregate_results_for_submission(results, args):
             "vector_definition": "unit target-minus-reference direction", "num_records": len(results), "records": results,
         }, handle, indent=2)
     eval_logger.info("ScanNet camera-basis {} records saved to {}.", prediction_format, path)
+
+
+def aggregate_object_direction_submission(results, args):
+    coordinate_frame = str(results[0].get("coordinate_frame", "camera")) if results else "camera"
+    task = PAIR_TASK_BY_FRAME.get(coordinate_frame, "scannet_basis_object_direction")
+    model = sanitize_model_name(getattr(args, "model", "") or "unknown_model")
+    path = generate_submission_file(f"{task}_{model}.json", args)
+    report = {
+        "dataset": "ScanNet v2 prepared camera frames",
+        "task": task,
+        "coordinate_frame": coordinate_frame,
+        "prediction_format": "object_direction",
+        "candidate_count": 4,
+        "relation_balanced": True,
+        "num_records": len(results),
+        "num_matched_pairs": len(basis._matched_format_pairs(results)),
+        "records": results,
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2)
+    eval_logger.info("ScanNet {} object/direction records saved to {}.", coordinate_frame, path)

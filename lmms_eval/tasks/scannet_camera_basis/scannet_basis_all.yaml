@@ -6,3 +6,5 @@ task:
   - scannet_object_basis_direction
   - scannet_object_basis_vector
   - scannet_object_basis_combined
+  - scannet_camera_basis_object_direction
+  - scannet_object_basis_object_direction
