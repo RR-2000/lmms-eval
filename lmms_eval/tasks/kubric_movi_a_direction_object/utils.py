@@ -31,6 +31,10 @@ SOURCE_FAMILIES = {
     "object_centric_relative_position",
     "object_centric_relative_position_multi",
 }
+RELATIVE_DIRECTION_SOURCE_FAMILIES = {
+    "camera_relative_direction",
+    "object_relative_direction",
+}
 DIRECTIONS = ("left", "right", "front", "behind")
 SAMPLE_SEED = "kubric_movi_a_direction_object_v1"
 
@@ -326,6 +330,89 @@ def clean_better_process_docs(dataset: Dataset) -> Dataset:
     return Dataset.from_list(records)
 
 
+def relative_direction_process_docs(dataset: Dataset) -> Dataset:
+    """Normalize the pre-paired camera/object-relative direction export.
+
+    Unlike the original MOVi-A task, this export already contains one authored
+    direction row and one authored object row per ``pair_id``.  Preserve those
+    questions and options, and only add the diagnostic fields expected by the
+    shared scoring and aggregation functions.
+    """
+    grouped = defaultdict(list)
+    for source in dataset:
+        doc = dict(source)
+        grouped[str(doc.get("pair_id", ""))].append(doc)
+
+    records = []
+    skipped = defaultdict(int)
+    for pair_id, pair in grouped.items():
+        if not pair_id:
+            skipped["missing_pair_id"] += len(pair)
+            continue
+        formats = {str(doc.get("answer_format", "")).strip() for doc in pair}
+        if len(pair) != 2 or formats != {"direction", "object"}:
+            skipped["incomplete_or_duplicate_pair"] += len(pair)
+            continue
+
+        families = {str(doc.get("task_family", "")).strip() for doc in pair}
+        relations = {str(doc.get("relation", "")).strip().lower() for doc in pair}
+        if len(families) != 1 or not families <= RELATIVE_DIRECTION_SOURCE_FAMILIES:
+            skipped["invalid_source_family"] += len(pair)
+            continue
+        if len(relations) != 1 or not relations <= set(DIRECTIONS):
+            skipped["invalid_relation"] += len(pair)
+            continue
+
+        family = next(iter(families))
+        relation = next(iter(relations))
+        anchor = str(pair[0].get("reference_object", "")).strip()
+        target = str(pair[0].get("target_object", "")).strip()
+        if not anchor or not target:
+            skipped["missing_objects"] += len(pair)
+            continue
+
+        normalized_pair = []
+        valid_pair = True
+        for doc in pair:
+            answer_format = str(doc["answer_format"]).strip()
+            options = _get_options(doc)
+            answer = str(doc.get("answer", "")).strip()
+            if set(options) != set("ABCD") or answer not in options:
+                valid_pair = False
+                break
+            normalized = dict(doc)
+            normalized.update(
+                {
+                    "source_qid": pair_id,
+                    "source_task_family": family,
+                    "diagnostic_variant": (
+                        "native" if answer_format == "direction" else "inverse"
+                    ),
+                    "diagnostic_answer_format": answer_format,
+                    "diagnostic_relation": relation,
+                    "diagnostic_anchor": anchor,
+                    "diagnostic_target_object": target,
+                    "diagnostic_target": (
+                        relation if answer_format == "direction" else target
+                    ),
+                    "diagnostic_option_count": 4,
+                }
+            )
+            normalized_pair.append(normalized)
+        if not valid_pair:
+            skipped["invalid_options_or_answer"] += len(pair)
+            continue
+        records.extend(normalized_pair)
+
+    eval_logger.info(
+        "Kubric relative-direction task loaded %d matched pairs (%d examples); skipped=%s.",
+        len(records) // 2,
+        len(records),
+        dict(skipped),
+    )
+    return Dataset.from_list(records)
+
+
 EXTENDED_DIRECTION_VARIANT = "direction_natural_language"
 EXTENDED_EXHAUSTIVE_VARIANT = "object_direction_exhaustive"
 EXTENDED_OPTION_LABELS = tuple("ABCDEFGHIJKLMNOP")
@@ -591,7 +678,7 @@ def process_results(doc, results):
             "gold_target": doc.get("diagnostic_target"),
         },
     }
-    for source_family in SOURCE_FAMILIES:
+    for source_family in SOURCE_FAMILIES | RELATIVE_DIRECTION_SOURCE_FAMILIES:
         result[f"{source_family}_format_switch_gain"] = entry
     return result
 
@@ -772,6 +859,14 @@ def aggregate_object_centric_relative_position_format_switch_gain(results):
 
 def aggregate_object_centric_relative_position_multi_format_switch_gain(results):
     return _paired_differences(results, "object_centric_relative_position_multi")
+
+
+def aggregate_camera_relative_direction_format_switch_gain(results):
+    return _paired_differences(results, "camera_relative_direction")
+
+
+def aggregate_object_relative_direction_format_switch_gain(results):
+    return _paired_differences(results, "object_relative_direction")
 
 
 def _submission_model_tag(args) -> str:

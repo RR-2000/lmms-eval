@@ -345,25 +345,34 @@ def process_left_arrow_docs(dataset: Dataset) -> Dataset:
 
 
 def _process_arrow_reading_docs(dataset: Dataset, direction: str) -> Dataset:
-    """Supply a gold overlay and ask the model to read its screen direction."""
+    """Supply a gold axis arrow and use it for object-perspective prediction."""
     task = f"comfort_gt_component_{direction}_arrow_reading"
     records = []
     for base in _base_scenes(dataset):
-        gold = _compass_label(base["basis_screen_directions"][direction])
-        records.append(_record(
-            base,
-            task,
-            f"{direction}_arrow_reading",
-            visual_mode="single_axis_arrow",
-            overlay_axis=direction,
-            gold_answer=gold,
-            answer_choices=list(COMPASS_DIRECTIONS),
-            prompt=(
-                f"The reference {base['reference_label']} is boxed. The overlaid arrow shows the "
-                f"object's ground-truth {direction} axis. In which image-plane direction does the "
-                "arrow point? Return exactly one of: " + ", ".join(COMPASS_DIRECTIONS) + "."
-            ),
-        ))
+        for source in SOURCE_DIRECTIONS:
+            target = base["targets"][source]
+            target_label = _display_label(target.get("label"))
+            # A name-only query is ambiguous when normalization merges two
+            # visible instance labels (for example HorseL and HorseR).
+            if base["label_counts"][target_label] > 1:
+                continue
+            records.append(_record(
+                base,
+                task,
+                f"{direction}_arrow_direction::{source}",
+                visual_mode="single_axis_arrow",
+                overlay_axis=direction,
+                query_object=target_label,
+                query_direction=SOURCE_TO_ANSWER[source],
+                gold_answer=SOURCE_TO_ANSWER[source],
+                answer_choices=list(HORIZONTAL_DIRECTIONS),
+                prompt=(
+                    f"The reference {base['reference_label']} is boxed. The overlaid arrow shows the "
+                    f"reference object's ground-truth {direction} axis. Using the reference object's "
+                    f"own perspective, where is the {target_label} relative to it? Return exactly one "
+                    f"of: {', '.join(HORIZONTAL_DIRECTIONS)}."
+                ),
+            ))
     return _finish(records, task)
 
 

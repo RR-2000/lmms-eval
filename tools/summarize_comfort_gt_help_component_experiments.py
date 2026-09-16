@@ -14,15 +14,15 @@ import matplotlib.pyplot as plt
 
 
 PREFIX = "comfort_gt_component_"
-DEFAULT_INPUT = Path("outputs/comfort_gt_help_components")
+DEFAULT_INPUT = Path("outputs/comfort_gt_help_components_8")
 TASK_INFO = {
     "comfort_gt_component_bbox_prediction": ("Localization", "BBox prediction", "bbox_iou"),
     "comfort_gt_component_bbox_naming": ("Localization", "Name boxed object", "accuracy"),
     "comfort_gt_component_facing_direction": ("Orientation", "8-way facing", "accuracy"),
     "comfort_gt_component_front_arrow": ("Orientation", "Predict front arrow", "arrow_cosine"),
-    "comfort_gt_component_front_arrow_reading": ("Orientation", "Read supplied front arrow", "accuracy"),
+    "comfort_gt_component_front_arrow_reading": ("Orientation", "Use supplied front arrow", "accuracy"),
     "comfort_gt_component_left_arrow": ("Orientation", "Predict left arrow", "arrow_cosine"),
-    "comfort_gt_component_left_arrow_reading": ("Orientation", "Read supplied left arrow", "accuracy"),
+    "comfort_gt_component_left_arrow_reading": ("Orientation", "Use supplied left arrow", "accuracy"),
     "comfort_gt_component_symbol_to_object": ("Symbol mapping", "Symbol to object", "accuracy"),
     "comfort_gt_component_object_to_symbol": ("Symbol mapping", "Object to symbol", "accuracy"),
     "comfort_gt_component_long_arrow_to_symbol": ("Symbol mapping", "Long arrows to symbol", "accuracy"),

@@ -142,6 +142,16 @@ else
   skip_analysis "ScanNet basis output is missing"
 fi
 
+scannet_object_direction_root="$OUTPUTS/scannet_basis_object_direction_8"
+if [[ -d "$scannet_object_direction_root/submissions" ]]; then
+  run_analysis "ScanNet object-vs-direction detailed analysis" \
+    python tools/analyze_scannet_object_direction_submission.py \
+    "$scannet_object_direction_root" \
+    --output-dir "$scannet_object_direction_root/scannet_object_direction_analysis"
+else
+  skip_analysis "ScanNet object/direction submissions are missing"
+fi
+
 # 7. COMFORT paired direction/object results and answer-vs-GT distributions.
 comfort_direction_submission="$OUTPUTS/comfort_direction_object_0/submissions/comfort_direction_object_qwen3_vl_experiments.json"
 if [[ -f "$comfort_direction_submission" ]]; then

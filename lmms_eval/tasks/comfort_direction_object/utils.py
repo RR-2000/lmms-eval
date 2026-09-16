@@ -31,9 +31,9 @@ def _target(doc: dict) -> str:
     return str(value or "").strip()
 
 
-def _image_path(doc: dict) -> str:
+def _image_path(doc: dict, data_root: Path = DATA_ROOT) -> str:
     value = Path(str(doc.get("image", "")))
-    return str(value if value.is_absolute() else DATA_ROOT / value)
+    return str(value if value.is_absolute() else data_root / value)
 
 
 def _source_relation_id(doc: dict) -> str:
@@ -51,8 +51,15 @@ def _group_pairs(rows):
     return grouped
 
 
-def process_docs(dataset: Dataset) -> Dataset:
-    """Validate and normalize the native COMFORT_Multi_3D annotations."""
+def process_docs_for_dataset(
+    dataset: Dataset,
+    *,
+    data_root: Path,
+    dataset_name: str,
+    task_name: str,
+    pair_by_answer_index: bool = True,
+) -> Dataset:
+    """Validate and normalize native paired COMFORT annotations."""
     records = []
     skipped = Counter()
     for source in dataset:
@@ -81,20 +88,24 @@ def process_docs(dataset: Dataset) -> Dataset:
             skipped["answer_option_mismatch"] += 1
             continue
 
-        image_path = _image_path(doc)
+        image_path = _image_path(doc, data_root)
         if not Path(image_path).is_file():
             skipped["missing_image"] += 1
             continue
 
-        source_id = _source_relation_id(doc)
+        source_id = (
+            _source_relation_id(doc)
+            if pair_by_answer_index
+            else f"{doc['scene_id']}::{relation}"
+        )
         doc.update(
             {
                 "qid": str(doc.get("id")),
                 "index": str(doc.get("id")),
                 "source_qid": source_id,
                 "source_relation_id": source_id,
-                "source_task_family": "COMFORT_Multi_3D",
-                "task_family": "comfort_direction_object",
+                "source_task_family": dataset_name,
+                "task_family": task_name,
                 "diagnostic_variant": answer_format,
                 "diagnostic_answer_format": answer_format,
                 "diagnostic_anchor": anchor,
@@ -128,7 +139,8 @@ def process_docs(dataset: Dataset) -> Dataset:
         ]
 
     eval_logger.info(
-        "COMFORT_Multi_3D direction/object loaded {} matched pairs ({} examples); skipped={}.",
+        "{} direction/object loaded {} matched pairs ({} examples); skipped={}.",
+        dataset_name,
         len(records) // 2,
         len(records),
         dict(skipped),
@@ -136,10 +148,21 @@ def process_docs(dataset: Dataset) -> Dataset:
     return Dataset.from_list(records)
 
 
+def process_docs(dataset: Dataset) -> Dataset:
+    """Validate and normalize the native COMFORT_Multi_3D annotations."""
+    return process_docs_for_dataset(
+        dataset,
+        data_root=DATA_ROOT,
+        dataset_name="COMFORT_Multi_3D",
+        task_name="comfort_direction_object",
+    )
+
+
 def doc_to_visual(doc):
     path = Path(str(doc.get("img_path") or doc.get("image_path") or ""))
     if not path.is_file():
-        raise FileNotFoundError(f"COMFORT_Multi_3D image not found for {doc.get('qid')}: {path}")
+        dataset_name = doc.get("source_task_family", "COMFORT")
+        raise FileNotFoundError(f"{dataset_name} image not found for {doc.get('qid')}: {path}")
     with Image.open(path) as image:
         return [image.convert("RGB")]
 
@@ -183,6 +206,8 @@ def _entry(doc, prediction: str, parsed: Optional[str]) -> dict:
         "source_qid": doc.get("source_qid"),
         "source_relation_id": doc.get("source_relation_id"),
         "scene_id": doc.get("scene_id"),
+        "dataset": doc.get("source_task_family"),
+        "task": doc.get("task_family"),
         "variant": doc.get("diagnostic_variant"),
         "answer_format": doc.get("diagnostic_answer_format"),
         "anchor": doc.get("diagnostic_anchor"),
@@ -321,15 +346,20 @@ def _stratify(results, field):
 
 
 def _log_report(results):
+    dataset_name = next(
+        (row.get("dataset") for row in results if row.get("dataset")), "COMFORT"
+    )
     eval_logger.info(
-        "COMFORT_Multi_3D matched pairs: {} across {} source groups.",
+        "{} matched pairs: {} across {} source groups.",
+        dataset_name,
         len(_matched_pairs(results)),
         len({row.get("source_relation_id") for row in results}),
     )
     for field in ("relation", "answer_format", "scene_id", "gold_option_letter"):
-        eval_logger.info("COMFORT_Multi_3D by {}: {}", field, _stratify(results, field))
+        eval_logger.info("{} by {}: {}", dataset_name, field, _stratify(results, field))
     eval_logger.info(
-        "COMFORT_Multi_3D prediction distribution: {}",
+        "{} prediction distribution: {}",
+        dataset_name,
         dict(
             sorted(
                 Counter(
@@ -341,15 +371,27 @@ def _log_report(results):
     )
 
 
-def aggregate_results_for_submission(results, args):
+def aggregate_results_for_submission_for_task(
+    results, args, *, dataset_name: str, task_name: str
+):
     model = sanitize_model_name(getattr(args, "model", "") or "unknown_model")
-    path = generate_submission_file(f"comfort_direction_object_{model}.json", args)
+    path = generate_submission_file(f"{task_name}_{model}.json", args)
     report = {
-        "dataset": "COMFORT_Multi_3D",
+        "dataset": dataset_name,
+        "task": task_name,
         "num_records": len(results),
         "num_matched_pairs": len(_matched_pairs(results)),
         "records": results,
     }
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
-    eval_logger.info("COMFORT_Multi_3D direction/object records saved to {}.", path)
+    eval_logger.info("{} direction/object records saved to {}.", dataset_name, path)
+
+
+def aggregate_results_for_submission(results, args):
+    return aggregate_results_for_submission_for_task(
+        results,
+        args,
+        dataset_name="COMFORT_Multi_3D",
+        task_name="comfort_direction_object",
+    )

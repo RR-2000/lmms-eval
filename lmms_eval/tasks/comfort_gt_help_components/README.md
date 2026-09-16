@@ -36,9 +36,9 @@ that query; tasks with an identifying box or marker can retain it.
 | bbox | utilization | `comfort_gt_component_bbox_naming` | one magenta box | object name | accuracy |
 | orientation label | generation | `comfort_gt_component_facing_direction` | reference box | 8-way image direction | accuracy |
 | front arrow | generation | `comfort_gt_component_front_arrow` | reference box | arrow start/end JSON | direction cosine |
-| front arrow | utilization | `comfort_gt_component_front_arrow_reading` | supplied front arrow | 8-way image direction | accuracy |
+| front arrow | utilization | `comfort_gt_component_front_arrow_reading` | supplied front arrow | object-perspective direction | accuracy |
 | left arrow | generation | `comfort_gt_component_left_arrow` | reference box | arrow start/end JSON | direction cosine |
-| left arrow | utilization | `comfort_gt_component_left_arrow_reading` | supplied left arrow | 8-way image direction | accuracy |
+| left arrow | utilization | `comfort_gt_component_left_arrow_reading` | supplied left arrow | object-perspective direction | accuracy |
 | abstract symbols | utilization | `comfort_gt_component_symbol_to_object` | letter circles | object name | accuracy |
 | abstract symbols | generation/encoding | `comfort_gt_component_object_to_symbol` | letter circles | letter | accuracy |
 | long-arrow mapping | utilization | `comfort_gt_component_long_arrow_to_symbol` | GT_HELP-6-length arrows + letters | letter | accuracy |
@@ -119,18 +119,17 @@ the semantic 3D axis. The start point is scored separately against the center
 of the reference bbox. The left-arrow task is identical except that it asks for
 the object's own left.
 
-The matched reading tasks instead draw the ground-truth arrow and ask for its
-eight-way image direction:
+The matched utilization tasks instead draw the ground-truth arrow and require
+the model to apply it to the downstream object-perspective direction task:
 
 ```text
-The reference chair is boxed. The overlaid arrow shows the object's
-ground-truth front axis. In which image-plane direction does the arrow point?
-Return exactly one of: right, down-right, down, down-left, left, up-left, up,
-up-right.
+The reference chair is boxed. The overlaid arrow shows the reference object's
+ground-truth front axis. Using the reference object's own perspective, where
+is the lamp relative to it? Return exactly one of: left, right, front, back.
 ```
 
 ```text
-up-left
+left
 ```
 
 ### Abstract symbols

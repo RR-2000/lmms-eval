@@ -108,6 +108,21 @@ For example, an input named `kubric_movi_a_object_centric_3d_qwen3_vl_experiment
 produces `kubric_movi_a_object_centric_3d_qwen3_vl_experiments_plots/` in the
 same folder.
 
+### `analyze_scannet_object_direction_submission.py`
+
+Summarize the matched ScanNet answer-with-object and answer-with-direction
+tasks across camera and object-facing-camera frames:
+
+```bash
+python tools/analyze_scannet_object_direction_submission.py \
+  outputs/scannet_basis_object_direction_8
+```
+
+The tool writes `summary.md`, JSON/CSV summaries, every matched pair and its
+outcome, per-direction breakdowns, answer-direction confusion counts, and
+three plots under
+`outputs/scannet_basis_object_direction_8/scannet_object_direction_analysis/`.
+
 ## Notebooks
 
 ### `make_image_hf_dataset.ipynb`

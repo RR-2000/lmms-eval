@@ -1,13 +1,15 @@
 #!/bin/bash
-#PBS -N lmms-comfort_gt_help_components
-#PBS -l select=1:ncpus=4:ngpus=1:mem=24gb:host=cvml06
+#PBS -N lmms-kubric_movi_a_direction_object_relative_direction
+#PBS -l select=1:ncpus=8:ngpus=1:mem=16gb:host=cvml10
 
 # Activate the Conda environment
-source /apps/miniconda3/etc/profile.d/conda.sh
+# source /apps/miniconda3/etc/profile.d/conda.sh
 # source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+source /home/ramanathan/miniconda3/etc/profile.d/conda.sh
 cd /home/ramanathan/VLM/lmms-eval
 nvidia-smi
-conda activate lmms
+conda activate /home/ramanathan/.conda/envs/lmms
+# conda activate lmms
 
 # vsibench_debiased, 3dsrbench, cv_bench_2d, mmsi_bench, stibench, vsibench_object_appearance_order, 
 # vsibench_baseline_bbox_object_size_estimation, vsibench_object_rel_direction_vector_hard
@@ -31,6 +33,9 @@ conda activate lmms
 # scannet_basis_all, scannet_basis_object_direction
 # comfort_full_map_inversion comfort_arrow_length_sweep comfort_map_ablation comfort_option_permutation
 # direction_vector_diagnostics_comfort, direction_vector_diagnostics_kubric, direction_vector_diagnostics_scannet
+# comfort_oriented_3d_direction_object
+# kubric_movi_a_direction_object_relative_direction
+
 
 # qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct, Qwen/Qwen3-VL-4B-Thinking
 # qwen2_5_vl, rayruiyang/VST-7B-RL
@@ -47,10 +52,10 @@ conda activate lmms
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-8B-Instruct" \
-  --tasks comfort_gt_help_components \
+  --tasks kubric_movi_a_direction_object_relative_direction \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/comfort_gt_help_components_8
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_object_relative_direction_8
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_direct_answer_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0
