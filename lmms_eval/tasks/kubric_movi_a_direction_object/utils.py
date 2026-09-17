@@ -405,7 +405,7 @@ def relative_direction_process_docs(dataset: Dataset) -> Dataset:
         records.extend(normalized_pair)
 
     eval_logger.info(
-        "Kubric relative-direction task loaded %d matched pairs (%d examples); skipped=%s.",
+        "Kubric relative-direction task loaded {} matched pairs ({} examples); skipped={}.",
         len(records) // 2,
         len(records),
         dict(skipped),

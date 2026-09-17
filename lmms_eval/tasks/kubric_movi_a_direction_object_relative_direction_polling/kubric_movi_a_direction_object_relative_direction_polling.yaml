@@ -1,0 +1,44 @@
+dataset_path: parquet
+dataset_name: null
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/movi_a_relative_direction/movi_a_validation.parquet
+task: "kubric_movi_a_direction_object_relative_direction_polling"
+test_split: test
+output_type: generate_until
+process_docs: !function utils.process_docs
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_results
+
+generation_kwargs:
+  max_new_tokens: 64
+  temperature: 0.0
+  top_p: 1.0
+  do_sample: false
+
+metric_list:
+  - {metric: accuracy, aggregation: !function utils.aggregate_accuracy, higher_is_better: true}
+  - {metric: direct_answer_accuracy, aggregation: !function utils.aggregate_direct_answer_accuracy, higher_is_better: true}
+  - {metric: final_polled_answer_accuracy, aggregation: !function utils.aggregate_final_polled_answer_accuracy, higher_is_better: true}
+  - {metric: direction_accuracy, aggregation: !function utils.aggregate_direction_accuracy, higher_is_better: true}
+  - {metric: poll_accuracy, aggregation: !function utils.aggregate_poll_accuracy, higher_is_better: true}
+  - {metric: left_poll_accuracy, aggregation: !function utils.aggregate_left_poll_accuracy, higher_is_better: true}
+  - {metric: right_poll_accuracy, aggregation: !function utils.aggregate_right_poll_accuracy, higher_is_better: true}
+  - {metric: front_poll_accuracy, aggregation: !function utils.aggregate_front_poll_accuracy, higher_is_better: true}
+  - {metric: behind_poll_accuracy, aggregation: !function utils.aggregate_behind_poll_accuracy, higher_is_better: true}
+  - {metric: full_pipeline_accuracy, aggregation: !function utils.aggregate_full_pipeline_accuracy, higher_is_better: true}
+  - {metric: strict_two_stage_accuracy, aggregation: !function utils.aggregate_strict_two_stage_accuracy, higher_is_better: true}
+  - {metric: chosen_poll_accuracy, aggregation: !function utils.aggregate_chosen_poll_accuracy, higher_is_better: true}
+  - {metric: oracle_direction_poll_accuracy, aggregation: !function utils.aggregate_oracle_direction_poll_accuracy, higher_is_better: true}
+  - {metric: pipeline_accuracy_given_direction_correct, aggregation: !function utils.aggregate_pipeline_accuracy_given_direction_correct, higher_is_better: true}
+  - {metric: pipeline_accuracy_given_direction_wrong, aggregation: !function utils.aggregate_pipeline_accuracy_given_direction_wrong, higher_is_better: false}
+  - {metric: exact_poll_map_accuracy, aggregation: !function utils.aggregate_exact_poll_map_accuracy, higher_is_better: true}
+  - {metric: collision_free_poll_map_rate, aggregation: !function utils.aggregate_collision_free_poll_map_rate, higher_is_better: true}
+  - {metric: mean_unique_poll_answer_ratio, aggregation: !function utils.aggregate_mean_unique_poll_answer_ratio, higher_is_better: true}
+  - {metric: parse_success_rate, aggregation: !function utils.aggregate_parse_success_rate, higher_is_better: true}
+  - {metric: submission, aggregation: !function utils.aggregate_results_for_submission, higher_is_better: false}
+
+metadata:
+  - version: 1.0
