@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N lmms-comfort_direction_object_polling
+#PBS -N lmms-comfort_direction_object_target_only_gt_polling
 #PBS -l select=1:ncpus=8:ngpus=1:mem=16gb:host=cvml10
 
 # Activate the Conda environment
@@ -36,7 +36,7 @@ conda activate /home/ramanathan/.conda/envs/lmms
 # comfort_oriented_3d_direction_object
 # kubric_movi_a_direction_object_relative_direction
 # comfort_direction_object_polling, kubric_movi_a_direction_object_relative_direction_polling
-
+# comfort_direction_object_target_only_gt_polling
 
 # qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct, Qwen/Qwen3-VL-4B-Thinking
 # qwen2_5_vl, rayruiyang/VST-7B-RL
@@ -53,10 +53,10 @@ conda activate /home/ramanathan/.conda/envs/lmms
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-8B-Instruct" \
-  --tasks comfort_direction_object_polling \
+  --tasks comfort_direction_object_target_only_gt_polling \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/comfort_direction_object_polling_8
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/comfort_direction_object_target_only_gt_polling_8
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_direct_answer_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0

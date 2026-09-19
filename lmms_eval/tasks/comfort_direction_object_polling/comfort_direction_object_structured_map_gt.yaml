@@ -1,0 +1,48 @@
+dataset_path: json
+dataset_name: null
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/COMFORT_Multi_3D/annotations.jsonl
+task: "comfort_direction_object_structured_map_gt"
+test_split: test
+output_type: generate_until
+process_docs: !function structured_map_gt_utils.process_docs
+doc_to_visual: !function structured_map_gt_utils.doc_to_visual
+doc_to_text: !function structured_map_gt_utils.doc_to_text
+doc_to_target: !function structured_map_gt_utils.doc_to_target
+process_results: !function structured_map_gt_utils.process_results
+
+generation_kwargs:
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  num_beams: 1
+  do_sample: false
+
+metric_list:
+  - metric: mapping_edge_accuracy
+    aggregation: !function structured_map_gt_utils.aggregate_mapping_edge_accuracy
+    higher_is_better: true
+  - metric: object_recovery_accuracy
+    aggregation: !function structured_map_gt_utils.aggregate_object_recovery_accuracy
+    higher_is_better: true
+  - metric: mapping_exact_accuracy
+    aggregation: !function structured_map_gt_utils.aggregate_mapping_exact_accuracy
+    higher_is_better: true
+  - metric: bijective_map_rate
+    aggregation: !function structured_map_gt_utils.aggregate_bijective_map_rate
+    higher_is_better: true
+  - metric: parse_success_rate
+    aggregation: !function structured_map_gt_utils.aggregate_parse_success_rate
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function structured_map_gt_utils.aggregate_results_for_submission
+    higher_is_better: false
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: ""
+
+metadata:
+  - version: 1.0

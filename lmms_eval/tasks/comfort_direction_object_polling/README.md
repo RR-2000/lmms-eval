@@ -30,3 +30,53 @@ python -m lmms_eval \
 ```
 
 Use limits divisible by five so every source group remains complete.
+
+## Target-only polling with ground-truth orientation
+
+`comfort_direction_object_target_only_gt_polling` follows the polling and
+decision procedure from `concrete_direction.target_only_inversion
+--no-geometry`. It does not ask the original four-way direction question.
+Instead, every source direction question produces four binary polls, one per
+direction, whose choices are the named target and `None of the above`. The
+target/none order is deterministically shuffled in the same way as the
+standalone pipeline. The final direction is the uniquely highest target vote;
+tied votes are reported as ambiguous.
+
+Each model-visible image has the four short, labeled reference axes drawn from
+COMFORT's ground-truth scene metadata using the same renderer as GT-help mode
+36. No depth, target geometry, or geometry-score fusion is used.
+
+```bash
+python -m lmms_eval \
+  --model dummy --model_args response=A \
+  --tasks comfort_direction_object_target_only_gt_polling \
+  --limit 16 --batch_size 1 --log_samples \
+  --output_path outputs/comfort_direction_object_target_only_gt_polling_debug
+```
+
+Use limits divisible by four so every target-only poll group remains complete.
+
+## One-shot structured object map
+
+`comfort_direction_object_structured_map_gt` asks for all four
+direction-to-object assignments in a single JSON response. It uses the same
+short ground-truth axis overlay as the target-only variant. Candidate object
+names are supplied in alphabetical order so their presentation does not encode
+their spatial assignment.
+
+The required response is:
+
+```json
+{"left":"<object>","right":"<object>","front":"<object>","behind":"<object>"}
+```
+
+There is one record per scene. Metrics report per-edge object recovery, exact
+four-edge map accuracy, valid-bijection rate, and JSON parse success.
+
+```bash
+python -m lmms_eval \
+  --model dummy --model_args response='{}' \
+  --tasks comfort_direction_object_structured_map_gt \
+  --limit 4 --batch_size 1 --log_samples \
+  --output_path outputs/comfort_direction_object_structured_map_gt_debug
+```
