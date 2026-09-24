@@ -62,6 +62,7 @@ scannet_object_basis_combined
 scannet_object_basis
 scannet_camera_basis_object_direction
 scannet_object_basis_object_direction
+scannet_object_basis_perspective
 scannet_basis_object_direction
 scannet_basis_all
 ```
@@ -120,6 +121,27 @@ The task reports overall, object-answer, direction-answer, parse, paired
 transition, and object-minus-direction metrics. Submission records include the
 prompt, four object candidates, gold answer, parsed prediction, frame, and
 pair identifier.
+
+### Object-perspective-only paired task
+
+`scannet_object_basis_perspective` is a separately named paired task for new
+runs that must not be mixed with older submissions whose saved prompts used a
+camera-basis instruction. Both its direction answers and object answers are
+computed in the reference object's constructed perspective: the reference is
+treated as facing the camera, its front points toward the camera, and its own
+right appears image-left. Its prompts never instruct the model to use camera
+right or the camera viewing direction.
+
+Run it with:
+
+```bash
+python -m lmms_eval \
+  --model qwen3_vl_experiments \
+  --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-8B-Instruct" \
+  --tasks scannet_object_basis_perspective \
+  --batch_size 1 --log_samples \
+  --output_path outputs/scannet_object_basis_perspective_8
+```
 
 ```bash
 python -m lmms_eval \

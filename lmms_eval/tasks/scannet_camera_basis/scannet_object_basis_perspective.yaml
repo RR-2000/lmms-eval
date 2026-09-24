@@ -1,0 +1,3 @@
+task: scannet_object_basis_perspective
+include: _object_direction_template_yaml
+process_docs: !function utils.process_object_basis_perspective_docs

@@ -1,0 +1,77 @@
+{
+  "audit_date": "2026-09-22",
+  "task": "3dsrbench_direction_object",
+  "construction_mode": "runtime process_docs transformation",
+  "generator": {
+    "file": "lmms_eval/tasks/3dsrbench_custom/utils.py",
+    "function": "direction_object_process_docs",
+    "seed_prefix": "3dsrbench_direction_object_v1",
+    "uses_language_model": false,
+    "introduced_commit": "91777fcf7d3ac255f1c8e5256a8ab3b21b4b7df7",
+    "thematic_padding_commit": "dfd7e3b6b143a8e760e70bea722948d49107ae28",
+    "audited_repository_head": "feafee20b959b404a096a3e6efc941434d1fe099"
+  },
+  "source": {
+    "path": "/home/ramanathan/data/3DSR/dataset.parquet",
+    "split": "test",
+    "rows": 5157,
+    "columns": 30,
+    "bytes": 1049380,
+    "mtime": "2026-06-11T15:35:37.872158790+08:00",
+    "sha256": "d503529754e9b24baf005db58654af70ae5cb7f35f25866836e5c19905465dca",
+    "image_source_from_rows": "MS-COCO train2017"
+  },
+  "selection": {
+    "qtype": "multi_object",
+    "relation": "viewpoint towards object",
+    "allowed_directions": ["left", "right", "front", "back"],
+    "candidate_rows": 343,
+    "retained_relations": 119,
+    "excluded_rows": 224,
+    "requires_nonempty_subject": true,
+    "requires_nonempty_target_object1": true,
+    "requires_image_derived_distractor": true
+  },
+  "output": {
+    "matched_pairs": 119,
+    "records": 238,
+    "native_direction_records": 119,
+    "inverse_object_records": 119,
+    "unique_images": 32,
+    "unflipped_relations": 61,
+    "horizontally_flipped_relations": 58,
+    "unique_subject_strings": 37,
+    "unique_target_strings": 45,
+    "duplicate_qids": 0,
+    "direction_distribution": {
+      "left": 34,
+      "right": 33,
+      "front": 30,
+      "back": 22
+    },
+    "native_gold_letter_distribution": {"A": 30, "B": 34, "C": 22, "D": 33},
+    "inverse_gold_letter_distribution": {"A": 24, "B": 35, "C": 30, "D": 30}
+  },
+  "inverse_distractors": {
+    "slots": 357,
+    "image_derived_slots": 146,
+    "thematic_generated_slots": 211,
+    "pairs_with_generated_distractors": 115,
+    "generated_distractor_count_per_pair": {"0": 4, "1": 19, "2": 96}
+  },
+  "generation": {
+    "inverse_question_template": "Consider the real-world 3D locations and orientations of the objects. Which object is in the direction that the {direction} side of the {subject} points toward?",
+    "option_count": 4,
+    "answer_type": "A-D multiple choice",
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "do_sample": false,
+    "max_new_tokens": 4096
+  },
+  "artifact_sha256": {
+    "lmms_eval/tasks/3dsrbench_custom/utils.py": "89ecebc75aa677d510d571943742fe492d2d6ef6fa742b4c5e1c6a8352b72979",
+    "lmms_eval/tasks/3dsrbench_custom/3dsrbench_direction_object.yaml": "2442eb45df52feeb6604056fa3818dcd05b8d08b967ed9cc22e5e6bad4937a26",
+    "lmms_eval/tasks/3dsrbench_custom/_default_template_yaml": "d88dc22f9231ceea7e7a5a179f36eef5374308b82807de0744231083cf428cc5",
+    "tools/analyze_3dsrbench_direction_object_submission.py": "5d630426c0fea81e97027ce0d0cf63985b123aa1e6c2005370fc9a2724bc1c3f"
+  }
+}

@@ -626,7 +626,10 @@ python -m lmms_eval --tasks list_with_num
 | `qwen2_vl` | Qwen2_VL | Image, Video |
 | `reka` | Reka | Multimodal API |
 | `ross` | Ross | Multimodal |
+| `sat` | SAT | Image, Video |
 | `slime` | Slime | Multimodal |
+| `spatial_mllm` | SpatialMLLM | Video |
+| `spatialladder` | SpatialLadder | Video |
 | `srt_api` | SRT_API | API |
 | `tinyllava` | TinyLlava | Image |
 | `videoChatGPT` | VideoChatGPT | Video |
@@ -636,11 +639,20 @@ python -m lmms_eval --tasks list_with_num
 | `videollama3` | VideoLLaMA3 | Video |
 | `vila` | VILA | Image, Video |
 | `vita` | VITA | Multimodal |
+| `vst` | VST | Video |
 | `vora` | VoRA | Multimodal |
 | `whisper` | Whisper | Audio |
 | `whisper_vllm` | WhisperVllm | Audio |
 | `xcomposer2_4KHD` | XComposer2_4KHD | High-resolution Image |
 | `xcomposer2d5` | XComposer2D5 | Image |
+
+SAT, SpatialLadder, VST, and Spatial-MLLM support image and single-video generation
+with `batch_size=1`; pass `modality=video` in `--model_args` for video tasks.
+SAT defaults to the merged `array/Qwen2.5-VL-SAT` checkpoint and requires
+`qwen-vl-utils`; it does not require the SAT training repository.
+VST and Spatial-MLLM also require their source repositories. Set `VST_ROOT`
+and `SPATIAL_MLLM_ROOT`, respectively, or pass
+`vst_root`/`spatial_mllm_root` in `--model_args`.
 
 ---
 

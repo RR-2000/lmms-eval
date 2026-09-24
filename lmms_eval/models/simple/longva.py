@@ -62,10 +62,12 @@ class LongVA(lmms):
         truncation: Optional[bool] = True,
         device: Optional[str] = "cuda:0",
         batch_size: Optional[Union[int, str]] = 1,
-        model_name: Optional[str] = None,
+        # LongVA-7B is Qwen2-based. Without "qwen" in this name, LongVA's
+        # loader silently constructs LlavaLlamaForCausalLM for the checkpoint.
+        model_name: Optional[str] = "llava_qwen",
         attn_implementation: Optional[str] = best_fit_attn_implementation,
         device_map: Optional[str] = "cuda:0",
-        conv_template: Optional[str] = "vicuna_v1",
+        conv_template: Optional[str] = "qwen_1_5",
         use_cache: Optional[bool] = True,
         truncate_context: Optional[bool] = False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         customized_config: Optional[str] = None,  # ends in json

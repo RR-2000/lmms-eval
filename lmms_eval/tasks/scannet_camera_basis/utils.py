@@ -29,7 +29,9 @@ OBJECT_TASK_BY_FORMAT = {
 PAIR_TASK_BY_FRAME = {
     "camera": "scannet_camera_basis_object_direction",
     "object_facing_camera": "scannet_object_basis_object_direction",
+    "object_perspective": "scannet_object_basis_perspective",
 }
+OBJECT_COORDINATE_FRAMES = {"object_facing_camera", "object_perspective"}
 
 
 def _unit_camera_vector(reference: dict, target: dict) -> dict[str, float]:
@@ -67,6 +69,8 @@ def _object_facing_camera_vector(reference: dict, target: dict) -> tuple[dict[st
 
 
 def _process_docs(dataset: Dataset, prediction_format: str, coordinate_frame: str = "camera") -> Dataset:
+    if coordinate_frame != "camera" and coordinate_frame not in OBJECT_COORDINATE_FRAMES:
+        raise ValueError(f"Unknown ScanNet coordinate frame {coordinate_frame!r}")
     task_mapping = TASK_BY_FORMAT if coordinate_frame == "camera" else OBJECT_TASK_BY_FORMAT
     if prediction_format not in task_mapping:
         raise ValueError(f"Unknown ScanNet prediction format {prediction_format!r}")
@@ -125,13 +129,18 @@ def _process_docs(dataset: Dataset, prediction_format: str, coordinate_frame: st
                     "gt_direction": direction,
                     "gt_vector": vector,
                     "evaluation_basis_camera_frame": evaluation_basis,
-                    "question": (f"From the camera's frame of reference, what is the 3D direction from the {reference_name} to the {target_name}?" if coordinate_frame == "camera" else f"From the {reference_name}'s frame while it looks back at the camera, what is the 3D direction from the {reference_name} to the {target_name}?"),
+                    "question": (
+                        f"From the camera's frame of reference, what is the 3D direction from the {reference_name} to the {target_name}?"
+                        if coordinate_frame == "camera"
+                        else f"From the {reference_name}'s perspective while it faces the camera, what is the 3D direction from the {reference_name} to the {target_name}?"
+                    ),
                     "img_path": str(image_path),
                     "image_path": str(image_path),
                 })
     eval_logger.info(
-        "ScanNet camera-basis {} task loaded {} pairs from {} views; skipped={}",
-        prediction_format, len(records), len({(row['scene_id'], row['frame_id']) for row in records}), dict(skipped),
+        "ScanNet {} {} task loaded {} pairs from {} views; skipped={}",
+        coordinate_frame, prediction_format, len(records),
+        len({(row['scene_id'], row['frame_id']) for row in records}), dict(skipped),
     )
     return Dataset.from_list(records)
 
@@ -212,6 +221,11 @@ def _process_object_direction_docs(dataset: Dataset, coordinate_frame: str) -> D
         pair_id = f"{source['pair_id']}::{coordinate_frame}::object_direction"
         if coordinate_frame == "camera":
             perspective = "the camera's frame of reference"
+        elif coordinate_frame == "object_perspective":
+            perspective = (
+                "the reference object's own perspective "
+                f"({source['reference_object']}), with the reference facing the camera"
+            )
         else:
             perspective = f"the {source['reference_object']}-centred frame while it looks back at the camera"
         shared = {
@@ -264,6 +278,18 @@ def process_camera_basis_object_direction_docs(dataset: Dataset) -> Dataset:
 
 def process_object_basis_object_direction_docs(dataset: Dataset) -> Dataset:
     return _process_object_direction_docs(dataset, "object_facing_camera")
+
+
+def process_object_basis_perspective_docs(dataset: Dataset) -> Dataset:
+    """Build the paired task entirely in the reference object's frame.
+
+    ScanNet does not provide semantic object yaw, so the reference object's
+    reproducible perspective is defined with the object facing the camera:
+    object-front points from its centre toward the camera and object-right is
+    image-left. Both direction-answer labels and object-answer relations are
+    derived after projecting into this frame.
+    """
+    return _process_object_direction_docs(dataset, "object_perspective")
 
 
 # Parsing, visual loading, targets, scoring, and scalar aggregations are shared
@@ -327,6 +353,11 @@ def doc_to_text(doc, lmms_eval_specific_kwargs=None):
             frame_text = (
                 "Use the camera frame: right is camera/image-right and front follows "
                 "the camera viewing direction. Do not use an object's semantic facing direction."
+            )
+        elif doc.get("coordinate_frame") == "object_perspective":
+            frame_text = (
+                f"Use the reference object's own axes ({doc['reference_object']}): its front "
+                "points toward the camera, and its own right appears on the left side of the image."
             )
         else:
             frame_text = (

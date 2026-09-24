@@ -34,7 +34,14 @@ from typing import Any
 SOURCE_FAMILIES = (
     "object_centric_relative_position",
     "object_centric_relative_position_multi",
+    "camera_relative_direction",
+    "object_relative_direction",
 )
+NATIVE_DIRECTION_FAMILIES = {
+    "object_centric_relative_position",
+    "camera_relative_direction",
+    "object_relative_direction",
+}
 VARIANTS = (
     "native",
     "inverse",
@@ -46,6 +53,7 @@ OUTCOME_KEYS = ("improved", "worsened", "unchanged_correct", "unchanged_incorrec
 DATASET_CANDIDATES = (
     Path("/home/ramanathan/data/movi_a_3dsr/movi_a_validation.parquet"),
     Path("/home/ramanathan/data/movi_a_3dsr_better_sample/" "movi_a_validation.parquet"),
+    Path("/home/ramanathan/data/movi_a_relative_direction/movi_a_validation.parquet"),
 )
 BASE_VARIANTS = frozenset({"native", "inverse"})
 
@@ -172,7 +180,7 @@ def analyze(records: list[dict[str, Any]]) -> dict[str, Any]:
         # The simple direction baseline is native for the single-object
         # source family, but inverse for the multi-object family: the latter's
         # original answer is an object, so its inverse is the direction row.
-        direction_baseline = "native" if family == "object_centric_relative_position" else "inverse"
+        direction_baseline = "native" if family in NATIVE_DIRECTION_FAMILIES else "inverse"
         for left, right in (
             ("inverse", "native"),
             ("direction_natural_language", direction_baseline),
@@ -333,6 +341,46 @@ def _load_object_directions(dataset_path: Path) -> dict[str, dict[str, str]]:
         import pyarrow.parquet as pq
     except ImportError as exc:
         raise RuntimeError("Answer-vs-GT plots require pyarrow") from exc
+
+    schema_names = set(pq.read_schema(dataset_path).names)
+    if {"pair_id", "img_path", "coordinate_frame", "reference_object", "target_object", "relation"} <= schema_names:
+        table = pq.read_table(
+            dataset_path,
+            columns=[
+                "pair_id",
+                "qid",
+                "img_path",
+                "coordinate_frame",
+                "reference_object",
+                "target_object",
+                "relation",
+            ],
+        )
+        docs = table.to_pylist()
+        by_map: dict[tuple[str, str, str], dict[str, str]] = defaultdict(dict)
+        pair_to_map = {}
+        for doc in docs:
+            key = (
+                str(doc.get("img_path") or ""),
+                str(doc.get("coordinate_frame") or ""),
+                str(doc.get("reference_object") or ""),
+            )
+            target = str(doc.get("target_object") or "")
+            relation = str(doc.get("relation") or "").lower()
+            if target and relation in RELATIONS:
+                by_map[key][target] = relation
+            pair_to_map[str(doc.get("pair_id") or "")] = key
+        lookup = {
+            pair_id: dict(by_map[key])
+            for pair_id, key in pair_to_map.items()
+            if pair_id
+        }
+        for doc in docs:
+            qid = str(doc.get("qid") or "")
+            pair_id = str(doc.get("pair_id") or "")
+            if qid and pair_id in lookup:
+                lookup[qid] = lookup[pair_id]
+        return lookup
 
     table = pq.read_table(
         dataset_path,
