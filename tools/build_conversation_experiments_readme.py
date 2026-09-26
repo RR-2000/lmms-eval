@@ -46,6 +46,8 @@ COMPONENTS = {
     "bbox_prediction": "Produce an object's normalized xyxy box from the plain image; scored primarily by IoU.",
     "bbox_naming": "Name the object inside a supplied magenta box; tests whether a VLM can consume a bbox overlay.",
     "facing_direction": "Classify the reference object's visible front into an eight-way image direction.",
+    "facing_direction_no_bbox": "Classify the named reference object's visible front from the unchanged RGB image, with no box or overlay text.",
+    "facing_direction_flip": "Repeat boxed facing classification on matched original and horizontally flipped images with mirrored targets.",
     "front_arrow": "Predict a two-point image arrow for the reference object's front; scored by direction cosine and start-point error.",
     "front_arrow_reading": "Use a supplied ground-truth front arrow to predict a target's direction in the reference object's perspective.",
     "left_arrow": "Predict a two-point image arrow for the reference object's left; exposes handedness errors separately from front estimation.",

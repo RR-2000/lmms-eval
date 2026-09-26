@@ -35,6 +35,8 @@ that query; tasks with an identifying box or marker can retain it.
 | bbox | generation | `comfort_gt_component_bbox_prediction` | plain image | `[x1,y1,x2,y2]` | mean IoU |
 | bbox | utilization | `comfort_gt_component_bbox_naming` | one magenta box | object name | accuracy |
 | orientation label | generation | `comfort_gt_component_facing_direction` | reference box | 8-way image direction | accuracy |
+| orientation label | generation | `comfort_gt_component_facing_direction_no_bbox` | unchanged RGB image | 8-way image direction | accuracy |
+| orientation label | generation/control | `comfort_gt_component_facing_direction_flip` | boxed original + horizontal flip | 8-way image direction | accuracy |
 | front arrow | generation | `comfort_gt_component_front_arrow` | reference box | arrow start/end JSON | direction cosine |
 | front arrow | utilization | `comfort_gt_component_front_arrow_reading` | supplied front arrow | object-perspective direction | accuracy |
 | left arrow | generation | `comfort_gt_component_left_arrow` | reference box | arrow start/end JSON | direction cosine |
@@ -118,6 +120,25 @@ The arrow direction is scored by cosine against the perspective projection of
 the semantic 3D axis. The start point is scored separately against the center
 of the reference bbox. The left-arrow task is identical except that it asks for
 the object's own left.
+
+### Facing direction without a box
+
+`comfort_gt_component_facing_direction_no_bbox` uses the same projected-front
+ground truth, eight-way answer vocabulary, and exact-match scorer as the boxed
+facing task. Its image is the untouched RGB scene: it adds no rectangle,
+`REF` text, arrow, mask, or other overlay. The prompt identifies the reference
+by its normalized object name:
+
+```text
+The reference object is the dog. In which image-plane direction is its own
+front facing? Return exactly one of: right, down-right, down, down-left, left,
+up-left, up, up-right.
+```
+
+Scenes in which label normalization produces multiple visible instances with
+the reference name are omitted because the unboxed prompt would be ambiguous.
+Compare this task directly with `comfort_gt_component_facing_direction` to
+measure the effect of the ground-truth reference box.
 
 The matched utilization tasks instead draw the ground-truth arrow and require
 the model to apply it to the downstream object-perspective direction task:

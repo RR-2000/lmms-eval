@@ -1,0 +1,20 @@
+task: comfort_gt_component_facing_direction_flip
+include: _classification_template_yaml
+process_docs: !function utils.process_facing_direction_flip_docs
+
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.aggregate_accuracy
+    higher_is_better: true
+  - metric: original_accuracy
+    aggregation: !function utils.aggregate_facing_original_accuracy
+    higher_is_better: true
+  - metric: horizontal_flip_accuracy
+    aggregation: !function utils.aggregate_facing_horizontal_flip_accuracy
+    higher_is_better: true
+  - metric: parse_success
+    aggregation: !function utils.aggregate_parse_success
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false

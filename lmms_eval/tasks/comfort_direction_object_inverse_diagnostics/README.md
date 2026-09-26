@@ -14,7 +14,7 @@ python -m lmms_eval \
   --output_path outputs/comfort_inverse_diagnostics
 ```
 
-The group contains six independently runnable tasks. Numbering below preserves
+The group contains seven independently runnable tasks. Numbering below preserves
 the experiment numbers from the original proposal, so the new sections are 5
 and 8:
 
@@ -22,6 +22,7 @@ and 8:
 |---|---:|---|
 | `comfort_full_map_inversion` | 5,000 | relation→object versus object→relation maps under five cues |
 | `comfort_arrow_length_sweep` | 24,000 | object versus direction accuracy at six arrow lengths |
+| `comfort_arrow_label_endpoint` | 24,000 | object versus direction accuracy at six positions from arrow origin to arrowhead |
 | `comfort_map_ablation` | 32,000 | object versus direction accuracy under eight map components |
 | `comfort_option_permutation` | 16,000 | stability across all four cyclic option orders |
 | `comfort_binary_axis` | 4,000 | two-choice left/right and front/behind tests |

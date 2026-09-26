@@ -3,6 +3,8 @@ task:
   - comfort_gt_component_bbox_prediction
   - comfort_gt_component_bbox_naming
   - comfort_gt_component_facing_direction
+  - comfort_gt_component_facing_direction_no_bbox
+  - comfort_gt_component_facing_direction_flip
   - comfort_gt_component_front_arrow
   - comfort_gt_component_front_arrow_reading
   - comfort_gt_component_left_arrow

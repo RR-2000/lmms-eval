@@ -1,0 +1,23 @@
+dataset_path: parquet
+dataset_name: null
+test_split: test
+task: "kubric_movi_a_direction_object_relative_direction_named_up_noise"
+include: _default_template_yaml
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/movi_a_relative_direction/movi_a_validation.parquet
+
+# Object-relative examples only: the representation encodes the reference
+# object's heading, which is not the governing frame for camera-relative rows.
+process_docs: !function utils.process_docs
+
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.aggregate_accuracy
+    higher_is_better: true
+  - metric: parse_success_rate
+    aggregation: !function utils.aggregate_parse_success_rate
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false

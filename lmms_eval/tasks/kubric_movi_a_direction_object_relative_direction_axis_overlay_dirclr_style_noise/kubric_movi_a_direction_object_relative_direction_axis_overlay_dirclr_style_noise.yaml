@@ -1,0 +1,23 @@
+dataset_path: parquet
+dataset_name: null
+test_split: test
+task: "kubric_movi_a_direction_object_relative_direction_axis_overlay_dirclr_style_noise"
+include: _default_template_yaml
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/movi_a_relative_direction/movi_a_validation.parquet
+
+# Object-relative pairs only. The symbolic representation and perturbation
+# schedules are unchanged from the axis-overlay / symbolic-up task.
+process_docs: !function utils.process_docs
+
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.aggregate_accuracy
+    higher_is_better: true
+  - metric: parse_success_rate
+    aggregation: !function utils.aggregate_parse_success_rate
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.aggregate_results_for_submission
+    higher_is_better: false

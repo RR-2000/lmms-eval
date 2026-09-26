@@ -17,7 +17,7 @@ from typing import Optional
 
 from datasets import Dataset
 from loguru import logger as eval_logger
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks.comfort_multi_3d_bbox_prediction.utils import compute_iou, parse_bbox
@@ -26,6 +26,10 @@ from lmms_eval.utils import sanitize_model_name
 
 
 DATA_ROOT = Path("/home/ramanathan/data/COMFORT_Multi_3D")
+# Prompt renderings for the paired facing-direction diagnostic.  These are
+# deterministic artefacts (one per scene and visual variant), so evaluation
+# workers can safely create them independently.
+PROMPT_IMAGE_ROOT = Path("/home/ramanathan/VLM/lmms-eval/outputs/comfort_gt_help_components_8/prompt_images")
 COORDINATE_MAX = 1000.0
 AXES = ("front", "up", "right")
 HORIZONTAL_DIRECTIONS = ("left", "right", "front", "back")
@@ -68,6 +72,8 @@ COMPONENT_ROLES = {
     "comfort_gt_component_bbox_prediction": ("bbox", "generation"),
     "comfort_gt_component_bbox_naming": ("bbox", "utilization"),
     "comfort_gt_component_facing_direction": ("orientation_label", "generation"),
+    "comfort_gt_component_facing_direction_no_bbox": ("orientation_label", "generation"),
+    "comfort_gt_component_facing_direction_flip": ("orientation_label", "generation"),
     "comfort_gt_component_front_arrow": ("front_arrow", "generation"),
     "comfort_gt_component_front_arrow_reading": ("front_arrow", "utilization"),
     "comfort_gt_component_left_arrow": ("left_arrow", "generation"),
@@ -310,6 +316,60 @@ def process_facing_direction_docs(dataset: Dataset) -> Dataset:
             answer_choices=list(COMPASS_DIRECTIONS),
             prompt=(f"The reference {base['reference_label']} is boxed. In which image-plane direction "
                     "is its own front facing? Return exactly one of: " + ", ".join(COMPASS_DIRECTIONS) + "."),
+        ))
+    return _finish(records, task)
+
+
+def process_facing_direction_no_bbox_docs(dataset: Dataset) -> Dataset:
+    """Predict facing from the untouched RGB image, without any box or label overlay."""
+    task = "comfort_gt_component_facing_direction_no_bbox"
+    records = []
+    for base in _base_scenes(dataset):
+        # Without a visual marker, a normalized name must identify exactly one
+        # visible instance; otherwise the prompt has no unambiguous referent.
+        if base["label_counts"][base["reference_label"]] > 1:
+            continue
+        gold = _compass_label(base["basis_screen_directions"]["front"])
+        records.append(_record(
+            base,
+            task,
+            "facing_no_bbox",
+            visual_mode="plain",
+            gold_answer=gold,
+            answer_choices=list(COMPASS_DIRECTIONS),
+            prompt=(
+                f"The reference object is the {base['reference_label']}. In which image-plane direction "
+                "is its own front facing? Return exactly one of: " + ", ".join(COMPASS_DIRECTIONS) + "."
+            ),
+        ))
+    return _finish(records, task)
+
+
+def process_facing_direction_flip_docs(dataset: Dataset) -> Dataset:
+    """Paired original/mirrored facing task with appropriately mirrored labels.
+
+    The question text is identical between the pair.  Only the final visual
+    prompt is mirrored.  Since the image x-axis changes sign under a horizontal
+    flip, the target compass label is recomputed from (-front_x, front_y).
+    """
+    task = "comfort_gt_component_facing_direction_flip"
+    records = []
+    for base in _base_scenes(dataset):
+        front_x, front_y = base["basis_screen_directions"]["front"]
+        common = {
+            "answer_choices": list(COMPASS_DIRECTIONS),
+            "prompt": (
+                f"The reference {base['reference_label']} is boxed. In which image-plane direction "
+                "is its own front facing? Return exactly one of: " + ", ".join(COMPASS_DIRECTIONS) + "."
+            ),
+        }
+        records.append(_record(
+            base, task, "facing::original", visual_mode="boxed_reference",
+            visual_variant="original", gold_answer=_compass_label([front_x, front_y]), **common,
+        ))
+        records.append(_record(
+            base, task, "facing::horizontal_flip", visual_mode="boxed_reference_hflip",
+            visual_variant="horizontal_flip", gold_answer=_compass_label([-front_x, front_y]), **common,
         ))
     return _finish(records, task)
 
@@ -608,6 +668,24 @@ def _draw_symbols(image: Image.Image, doc: dict) -> None:
         draw.text((x - (text_box[2] - text_box[0]) / 2, y - (text_box[3] - text_box[1]) / 2), symbol, fill=(0, 0, 0), stroke_width=1)
 
 
+def _mirrored_render_object(obj: dict) -> dict:
+    """Return an object's normalized bbox after a left-right image flip."""
+    mirrored = dict(obj)
+    x1, y1, x2, y2 = [float(value) for value in obj["bbox"]]
+    mirrored["bbox"] = [COORDINATE_MAX - x2, y1, COORDINATE_MAX - x1, y2]
+    return mirrored
+
+
+def _save_facing_prompt_image(image: Image.Image, doc: dict) -> None:
+    """Persist the exact image delivered to the model for paired-facing runs."""
+    if doc.get("diagnostic_task") != "comfort_gt_component_facing_direction_flip":
+        return
+    variant = str(doc.get("visual_variant", "unknown"))
+    output = PROMPT_IMAGE_ROOT / "facing_direction_flip" / variant / f"{doc['scene_id']}.png"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output)
+
+
 def doc_to_visual(doc):
     path = Path(str(doc.get("img_path", "")))
     if not path.is_file():
@@ -621,6 +699,9 @@ def doc_to_visual(doc):
         _draw_box(image, _object_by_id(doc, doc["overlay_object_id"]))
     elif mode == "boxed_reference":
         _draw_box(image, _reference_render(doc), "REF")
+    elif mode == "boxed_reference_hflip":
+        image = ImageOps.mirror(image)
+        _draw_box(image, _mirrored_render_object(_reference_render(doc)), "REF")
     elif mode.startswith("symbols"):
         _draw_symbols(image, doc)
         if mode.endswith("_arrows"):
@@ -650,6 +731,7 @@ def doc_to_visual(doc):
         _draw_arrow(image, start, doc["basis_screen_directions"][axis], length, axis)
     else:
         raise ValueError(f"Unknown visual mode {mode!r}")
+    _save_facing_prompt_image(image, doc)
     return [image]
 
 
@@ -838,7 +920,7 @@ def process_projected_axes_results(doc, results):
 
 
 def _common_entry(doc: dict, prediction: str, **scores) -> dict:
-    keys = ("qid", "scene_id", "diagnostic_task", "component_name", "component_role", "reference_object", "object_id", "object_label", "query_object", "query_symbol", "query_direction", "gold_answer", "gt_bbox", "gt_arrow_start", "gt_arrow_end", "gt_arrow_direction", "gt_vector", "gt_basis_screen", "input_vector", "visual_mode", "overlay_axis")
+    keys = ("qid", "scene_id", "diagnostic_task", "component_name", "component_role", "reference_object", "object_id", "object_label", "query_object", "query_symbol", "query_direction", "gold_answer", "gt_bbox", "gt_arrow_start", "gt_arrow_end", "gt_arrow_direction", "gt_vector", "gt_basis_screen", "input_vector", "visual_mode", "visual_variant", "overlay_axis")
     return {**{key: doc.get(key) for key in keys if key in doc}, "prediction": prediction, **scores}
 
 
@@ -864,6 +946,19 @@ def aggregate_accuracy(results):
     score = _aggregate(results, "accuracy")
     eval_logger.info("COMFORT component accuracy {:.4f}; by answer={}", score, {key: _mean(value) for key, value in sorted(grouped.items())})
     return score
+
+
+def _aggregate_visual_variant_accuracy(results, variant: str) -> float:
+    subset = [row for row in results if row.get("visual_variant") == variant]
+    return _aggregate(subset, "accuracy")
+
+
+def aggregate_facing_original_accuracy(results):
+    return _aggregate_visual_variant_accuracy(results, "original")
+
+
+def aggregate_facing_horizontal_flip_accuracy(results):
+    return _aggregate_visual_variant_accuracy(results, "horizontal_flip")
 
 
 def aggregate_parse_success(results):
@@ -920,6 +1015,19 @@ def aggregate_results_for_submission(results, args):
     model = sanitize_model_name(getattr(args, "model", "") or "unknown_model")
     path = generate_submission_file(f"{task}_{model}.json", args)
     numeric_fields = sorted({key for row in results for key, value in row.items() if isinstance(value, (int, float)) and not isinstance(value, bool)})
+    per_visual_variant = {}
+    variants = sorted({str(row["visual_variant"]) for row in results if row.get("visual_variant") is not None})
+    for variant in variants:
+        subset = [row for row in results if str(row.get("visual_variant")) == variant]
+        predictions = Counter(str(row.get("parsed_answer")) for row in subset)
+        gold = Counter(str(row.get("gold_answer")) for row in subset)
+        per_visual_variant[variant] = {
+            "num_records": len(subset),
+            "accuracy": _aggregate(subset, "accuracy"),
+            "parse_success": _aggregate(subset, "parse_success"),
+            "prediction_distribution": dict(sorted(predictions.items())),
+            "gold_distribution": dict(sorted(gold.items())),
+        }
     report = {
         "dataset": "COMFORT_Multi_3D",
         "task": task,
@@ -927,6 +1035,8 @@ def aggregate_results_for_submission(results, args):
         "metrics": {field: _aggregate(results, field) for field in numeric_fields},
         "records": results,
     }
+    if per_visual_variant:
+        report["per_visual_variant"] = per_visual_variant
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
     eval_logger.info("COMFORT component submission saved to {}", path)

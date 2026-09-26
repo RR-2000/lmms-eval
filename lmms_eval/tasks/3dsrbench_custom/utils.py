@@ -8,6 +8,7 @@ import random
 import re
 import string
 from collections import Counter, defaultdict
+from functools import lru_cache
 from typing import Optional
 
 import pandas as pd
@@ -74,6 +75,12 @@ DIRECTION_OBJECT_QTYPE = "multi_object"
 DIRECTION_OBJECT_RELATION = "viewpoint towards object"
 DIRECTION_OBJECT_DIRECTIONS = {"left", "right", "front", "back"}
 DIRECTION_OBJECT_SAMPLE_SEED = "3dsrbench_direction_object_v1"
+QWEN_DIRECTION_OBJECT_SAMPLE_SEED = "3dsrbench_direction_object_qwen3vl_8b_scene_v1"
+QWEN_DIRECTION_OBJECT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
+QWEN_DIRECTION_OBJECT_MANIFEST_ENV = "THREEDSR_QWEN_DISTRACTOR_MANIFEST"
+QWEN_DIRECTION_OBJECT_DEFAULT_MANIFEST = Path(
+    "/home/ramanathan/data/3DSR/3dsrbench_qwen3vl_8b_scene_objects.json"
+)
 
 # Used only when a source image does not provide enough distinct queried
 # objects for the inverse object-choice prompt.  The pools make the synthetic
@@ -1019,9 +1026,13 @@ def _direction_object_theme(*terms: str) -> str:
 
 
 def _direction_object_four_options(
-    target: str, subject: str, image_candidates: list[str]
+    target: str,
+    subject: str,
+    image_candidates: list[str],
+    padding_candidates: Optional[list[str]] = None,
+    allow_thematic_padding: bool = True,
 ) -> tuple[list[str], list[str]]:
-    """Return target plus three distinct, in-theme distractors.
+    """Return target plus three distinct distractors.
 
     Image-grounded object names are preferred.  If fewer than four are
     available, a deterministic thematic pool supplies the remaining labels.
@@ -1048,6 +1059,18 @@ def _direction_object_four_options(
         if len(candidates) == 4:
             return candidates, generated
 
+    for candidate in padding_candidates or []:
+        add(candidate, is_generated=True)
+        if len(candidates) == 4:
+            return candidates, generated
+
+    if not allow_thematic_padding:
+        raise ValueError(
+            "Qwen scene-object manifest did not provide enough distinct visible "
+            f"objects to make four choices for target={target!r}, subject={subject!r}; "
+            f"only found {candidates!r}. Regenerate the manifest with more retries."
+        )
+
     # The target's class is the strongest indicator of an appropriate
     # distractor theme; the subject may belong to a different class (for
     # example, a truck pointing at a stop sign).
@@ -1066,13 +1089,56 @@ def _direction_object_four_options(
     return candidates, generated
 
 
+@lru_cache(maxsize=4)
+def _load_qwen_direction_object_manifest(path_string: str) -> dict[str, list[str]]:
+    path = Path(path_string).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Qwen scene-object manifest not found: {path}. Generate it with "
+            "tools/generate_3dsr_qwen_scene_distractors.py or set "
+            f"{QWEN_DIRECTION_OBJECT_MANIFEST_ENV}."
+        )
+    with path.open(encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a JSON object in Qwen distractor manifest {path}")
+    model = str(payload.get("model", ""))
+    if model and model != QWEN_DIRECTION_OBJECT_MODEL:
+        raise ValueError(
+            f"Qwen distractor manifest uses {model!r}; expected {QWEN_DIRECTION_OBJECT_MODEL!r}"
+        )
+    images = payload.get("images", payload)
+    if not isinstance(images, dict):
+        raise ValueError(f"Manifest {path} has no object-valued 'images' mapping")
+    result = {}
+    for image_key, entry in images.items():
+        objects = entry.get("objects", []) if isinstance(entry, dict) else entry
+        if not isinstance(objects, list):
+            raise ValueError(f"Manifest objects for image {image_key!r} must be a list")
+        result[str(image_key)] = [str(value).strip() for value in objects if str(value).strip()]
+    return result
+
+
+def _qwen_direction_object_scene_objects() -> dict[str, list[str]]:
+    path = os.getenv(
+        QWEN_DIRECTION_OBJECT_MANIFEST_ENV,
+        str(QWEN_DIRECTION_OBJECT_DEFAULT_MANIFEST),
+    )
+    return _load_qwen_direction_object_manifest(path)
+
+
 def _direction_object_set_options(doc: dict, values: list[str], answer_value: str) -> None:
     for index, letter in enumerate("ABCD"):
         doc[letter] = values[index] if index < len(values) else None
     doc["answer"] = "ABCD"[values.index(answer_value)]
 
 
-def direction_object_process_docs(dataset):
+def _direction_object_process_docs(
+    dataset,
+    *,
+    sample_seed: str,
+    qwen_scene_objects: Optional[dict[str, list[str]]] = None,
+):
     """Create matched direction-answer and object-answer 3DSRBench examples.
 
     Only ``multi_object_viewpoint_towards_object`` is used because it specifies
@@ -1126,10 +1192,15 @@ def direction_object_process_docs(dataset):
         if len(image_derived_options) < 2:
             skipped += 1
             continue
+        image_key = _direction_object_image_key(doc)
         candidates, generated_distractors = _direction_object_four_options(
-            target, subject, image_candidates
+            target,
+            subject,
+            image_candidates,
+            padding_candidates=(qwen_scene_objects or {}).get(image_key, []),
+            allow_thematic_padding=qwen_scene_objects is None,
         )
-        random.Random(f"{DIRECTION_OBJECT_SAMPLE_SEED}:{source_qid}").shuffle(candidates)
+        random.Random(f"{sample_seed}:{source_qid}").shuffle(candidates)
 
         common = dict(doc)
         common.update(
@@ -1139,8 +1210,11 @@ def direction_object_process_docs(dataset):
                 "diagnostic_subject": subject,
                 "diagnostic_target_object": target,
                 "diagnostic_direction": direction,
-                "diagnostic_sample_seed": DIRECTION_OBJECT_SAMPLE_SEED,
+                "diagnostic_sample_seed": sample_seed,
                 "diagnostic_generated_object_distractors": generated_distractors,
+                "diagnostic_object_distractor_source": (
+                    QWEN_DIRECTION_OBJECT_MODEL if qwen_scene_objects is not None else "thematic_pool"
+                ),
             }
         )
 
@@ -1176,12 +1250,15 @@ def direction_object_process_docs(dataset):
         records.append(inverse)
 
     if skipped:
-        eval_logger.warning("Skipped %d 3DSR direction/object rows without a valid paired transformation.", skipped)
+        eval_logger.warning(
+            "Skipped {} 3DSR direction/object rows without a valid paired transformation.",
+            skipped,
+        )
     eval_logger.info(
-        "3DSR direction/object task created %d matched examples from %d source rows (seed=%s).",
+        "3DSR direction/object task created {} matched examples from {} source rows (seed={}).",
         len(records),
         len(records) // 2,
-        DIRECTION_OBJECT_SAMPLE_SEED,
+        sample_seed,
     )
     try:
         from datasets import Dataset
@@ -1190,6 +1267,23 @@ def direction_object_process_docs(dataset):
     except ImportError:
         # Kept for lightweight unit tests outside the lmms-eval environment.
         return records
+
+
+def direction_object_process_docs(dataset):
+    """Build the original paired task with deterministic thematic padding."""
+    return _direction_object_process_docs(
+        dataset,
+        sample_seed=DIRECTION_OBJECT_SAMPLE_SEED,
+    )
+
+
+def qwen_direction_object_process_docs(dataset):
+    """Build the paired task using only Qwen-detected scene objects as padding."""
+    return _direction_object_process_docs(
+        dataset,
+        sample_seed=QWEN_DIRECTION_OBJECT_SAMPLE_SEED,
+        qwen_scene_objects=_qwen_direction_object_scene_objects(),
+    )
 
 
 def direction_object_doc_to_text(doc, lmms_eval_specific_kwargs=None):
@@ -1352,6 +1446,16 @@ def direction_object_aggregate_results_for_submission(results, args):
     with open(path, "w") as file:
         json.dump(results, file, indent=2)
     eval_logger.info(f"3DSR direction/object records saved to {path}.")
+
+
+def qwen_direction_object_aggregate_results_for_submission(results, args):
+    path = generate_submission_file(
+        f"3dsrbench_direction_object_qwen3vl_distractors_{_get_submission_model_tag(args)}.json",
+        args,
+    )
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(results, file, indent=2, ensure_ascii=False)
+    eval_logger.info(f"3DSR Qwen-padded direction/object records saved to {path}.")
 
 
 def direction_object_direct_answer_aggregate_results_for_submission(results, args):

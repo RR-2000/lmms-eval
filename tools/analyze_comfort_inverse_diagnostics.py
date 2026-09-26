@@ -19,6 +19,7 @@ OUTPUT_DIR_NAME = "inverse_diagnostic_analysis"
 PREFIXES = (
     "comfort_full_map_inversion_",
     "comfort_arrow_length_sweep_",
+    "comfort_arrow_label_endpoint_",
     "comfort_map_ablation_",
     "comfort_option_permutation_",
     "comfort_binary_axis_",
@@ -260,6 +261,40 @@ def plot_arrow(rows: list[dict[str, Any]], output: Path) -> None:
     plt.close(fig)
 
 
+def plot_arrow_label_position(rows: list[dict[str, Any]], output: Path) -> None:
+    overall = grouped_means(rows, ("experiment_condition", "answer_format"), ("score",))
+    positions = [f"position_{index / 5:.1f}" for index in range(6)]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for answer_format in ("object", "direction"):
+        points = [
+            (index / 5, row["score"])
+            for index, condition in enumerate(positions)
+            for row in overall
+            if row["experiment_condition"] == condition and row["answer_format"] == answer_format
+        ]
+        if points:
+            ax.plot(
+                [point[0] for point in points],
+                [point[1] for point in points],
+                marker="o",
+                linewidth=2.2,
+                label=answer_format.title(),
+                color=FORMAT_COLORS[answer_format],
+            )
+    ax.set_xlim(-0.03, 1.03)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xticks([index / 5 for index in range(6)])
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax.set_xlabel("Label position along arrow (origin = 0, arrowhead = 1)")
+    ax.set_ylabel("Accuracy")
+    ax.set_title("Arrow-Label Position Sweep: Object vs Direction Answers")
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(output / "arrow_label_endpoint_accuracy.png", dpi=200)
+    plt.close(fig)
+
+
 def plot_permutation(rows: list[dict[str, Any]], groups: list[dict[str, Any]], output: Path) -> None:
     position = grouped_means(rows, ("permutation_index", "answer_format"), ("score",))
     _grouped_bar(position, "permutation_index", "answer_format", "score", FORMAT_COLORS, "Accuracy by Gold Option Position", output / "option_position_accuracy.png")
@@ -308,7 +343,7 @@ def main() -> int:
     if full:
         tables["full_map_inversion"] = grouped_means(full, ("experiment_condition", "mapping_format"), ("mapping_edge_accuracy", "mapping_exact_accuracy", "parse_success"))
         _grouped_bar(tables["full_map_inversion"], "experiment_condition", "mapping_format", "mapping_edge_accuracy", MAPPING_COLORS, "Full-Map Inversion Edge Accuracy", output / "full_map_inversion.png")
-    for experiment in ("arrow_length_sweep", "map_ablation", "binary_axis", "oracle_ladder"):
+    for experiment in ("arrow_length_sweep", "arrow_label_endpoint", "map_ablation", "binary_axis", "oracle_ladder"):
         rows = submissions.get(experiment, [])
         if not rows:
             continue
@@ -320,6 +355,8 @@ def main() -> int:
         tables[f"{experiment}_paired"] = paired_outcomes(rows)
         if experiment == "arrow_length_sweep":
             plot_arrow(rows, output)
+        elif experiment == "arrow_label_endpoint":
+            plot_arrow_label_position(rows, output)
         elif experiment == "map_ablation":
             _grouped_bar(tables[experiment], "experiment_condition", "answer_format", "score", FORMAT_COLORS, "Canonical-Map Ablation Accuracy", output / "map_ablation_accuracy.png")
         elif experiment == "binary_axis":

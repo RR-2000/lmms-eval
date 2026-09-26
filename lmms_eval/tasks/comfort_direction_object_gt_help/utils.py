@@ -300,6 +300,9 @@ def _draw_direction_arrow(
     label: str,
     width: int,
     image: Image.Image,
+    *,
+    label_at_tail: bool = False,
+    label_position: float | None = None,
 ) -> None:
     dx, dy = screen_direction
     end = (
@@ -328,8 +331,19 @@ def _draw_direction_arrow(
     text_box = draw.textbbox((0, 0), label)
     text_width = text_box[2] - text_box[0]
     text_height = text_box[3] - text_box[1]
-    label_x = max(0, min(image.width - text_width - 6, round(end[0] + dx * 4)))
-    label_y = max(0, min(image.height - text_height - 4, round(end[1] + dy * 4)))
+    # A normalized position of 0 is the arrow origin and 1 is the arrowhead.
+    # The default preserves the established arrowhead-label rendering.
+    if label_position is None:
+        label_position = 0.0 if label_at_tail else 1.0
+    label_position = max(0.0, min(1.0, float(label_position)))
+    label_anchor = (
+        start[0] + (end[0] - start[0]) * label_position,
+        start[1] + (end[1] - start[1]) * label_position,
+    )
+    label_dx, label_dy = dx, dy
+    label_offset = 4.0
+    label_x = max(0, min(image.width - text_width - 6, round(label_anchor[0] + label_dx * label_offset)))
+    label_y = max(0, min(image.height - text_height - 4, round(label_anchor[1] + label_dy * label_offset)))
     draw.rectangle(
         (label_x, label_y, label_x + text_width + 6, label_y + text_height + 4),
         fill=color,
@@ -344,6 +358,8 @@ def _draw_reference_direction_arrows_with_scale(
     length_scale: float,
     minimum_length: float,
     directions: Iterable[str] = base.DIRECTIONS,
+    label_at_tail: bool = False,
+    label_position: float | None = None,
 ) -> Image.Image:
     """Draw the labeled semantic axes with configurable arrow length."""
     output = image.copy()
@@ -373,6 +389,8 @@ def _draw_reference_direction_arrows_with_scale(
             direction,
             width,
             output,
+            label_at_tail=label_at_tail,
+            label_position=label_position,
         )
     return output
 

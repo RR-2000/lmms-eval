@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N lmms-comfort_coordinate_representation_analysis_orientation
-#PBS -l select=1:ncpus=8:ngpus=1:mem=16gb:host=cvml10
+#PBS -N lmms-kubric_movi_a_direction_object_relative_direction_axis_overlay_dirclr_style_noise
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:host=cvml12
 
 # Activate the Conda environment
 # source /apps/miniconda3/etc/profile.d/conda.sh
@@ -51,7 +51,15 @@ conda activate /home/ramanathan/.conda/envs/lmms
 # 3dsrbench_direction_object
 # COMFORT_REPRESENTATION_SUITE=core comfort_coordinate_representation_analysis 
 # COMFORT_REPRESENTATION_SUITE=jitter  comfort_coordinate_representation_analysis 
-# COMFORT_REPRESENTATION_SUITE=orientation  comfort_coordinate_representation_analysis 
+# COMFORT_REPRESENTATION_SUITE=orientation  comfort_coordinate_representation_analysis
+# comfort_gt_component_facing_direction_no_bbox
+# comfort_gt_component_facing_direction_flip
+# kubric_movi_a_direction_object_relative_direction_representation_noise
+# KUBRIC_RELATIVE_REPRESENTATION_SUITE=core
+# KUBRIC_RELATIVE_REPRESENTATION_SUITE=detection
+# KUBRIC_RELATIVE_REPRESENTATION_SUITE=centroid
+# KUBRIC_RELATIVE_REPRESENTATION_SUITE=orientation
+# KUBRIC_RELATIVE_REPRESENTATION_SUITE=all
 
 # qwen3_vl_experiments, Qwen/Qwen3-VL-4B-Instruct, Qwen/Qwen3-VL-4B-Thinking
 # qwen2_5_vl, rayruiyang/VST-7B-RL
@@ -65,14 +73,16 @@ conda activate /home/ramanathan/.conda/envs/lmms
 # LMMS_EVAL_VIEWPOINT_HINT_EXCLUDE_GOLD_ANSWER=1 \
 # LMMS_EVAL_DIRECTION_VECTOR_BALANCE_FAMILIES=1 \
 # THINKING_FORMAT=1 \
-COMFORT_REPRESENTATION_SUITE=orientation \
+KUBRIC_RELATIVE_REPRESENTATION_SUITE=all \
+KUBRIC_RELATIVE_REPRESENTATION_DEBUG=1 \
+KUBRIC_RELATIVE_REPRESENTATION_DEBUG_DIR=/home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_object_relative_direction_axis_overlay_dirclr_style_noise_8/prompt_images \
 python -m lmms_eval \
   --model qwen3_vl_experiments \
   --model_args max_num_frames=32,pretrained="Qwen/Qwen3-VL-8B-Instruct" \
-  --tasks comfort_coordinate_representation_analysis \
+  --tasks kubric_movi_a_direction_object_relative_direction_axis_overlay_dirclr_style_noise \
   --batch_size 1 \
   --limit -1 \
-  --output_path /home/ramanathan/VLM/lmms-eval/outputs/comfort_coordinate_representation_analysis_orientation_8
+  --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_direction_object_relative_direction_axis_overlay_dirclr_style_noise_8
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_direction_object_direct_answer_0
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_viewpoint_pred_No_GT_6
   # --output_path /home/ramanathan/VLM/lmms-eval/outputs/kubric_movi_a_obj_vs_dir_0

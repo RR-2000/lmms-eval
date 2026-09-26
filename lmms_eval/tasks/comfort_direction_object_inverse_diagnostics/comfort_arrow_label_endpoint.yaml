@@ -1,0 +1,3 @@
+task: comfort_arrow_label_endpoint
+include: _mc_template_yaml
+process_docs: !function utils.process_arrow_label_endpoint_docs

@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N lmms-internvideo3
-#PBS -l select=1:ncpus=6:ngpus=1:mem=32gb:host=cvml10
+#PBS -N lmms-internvl3_5
+#PBS -l select=1:ncpus=6:ngpus=1:mem=32gb:host=cvml07
 
 # Activate the Conda environment
 source /home/ramanathan/miniconda3/etc/profile.d/conda.sh
@@ -27,18 +27,19 @@ nvidia-smi
 
 export OPENAI_API_KEY="<>YOUR_OPENAI_API_KEY_HERE<>"
 
-model=internvideo3
-model_weights=yanziang/InternVideo3-8B-Instruct
+model=internvl3_5
+model_weights=OpenGVLab/InternVL3_5-8B
 model_type=gpt-5.6-luna
 # tasks=(comfort_direction_object 3dsrbench_direction_object scannet_object_basis_perspective  comfort_oriented_3d_direction_object kubric_movi_a_direction_object_relative_direction)
-tasks=(comfort_direction_object)
+tasks=(3dsrbench_direction_object_qwen3vl_distractors)
+# comfort_gt_component_facing_direction_no_bbox 3dsrbench_direction_object_qwen3vl_distractors
 conda activate /home/ramanathan/.conda/envs/lmms2
 # ,attn_implementation=sdpa,model=$model_type,
 # --gen_kwargs max_new_tokens=4096
 for task in "${tasks[@]}"; do
   python -m lmms_eval \
     --model $model \
-    --model_args pretrained="$model_weights" \
+    --model_args pretrained="$model_weights", \
     --tasks $task \
     --batch_size 1 \
     --limit -1 \

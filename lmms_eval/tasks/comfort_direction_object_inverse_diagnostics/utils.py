@@ -61,6 +61,7 @@ ORACLE_LADDER = (
     "answer_letter_oracle",
 )
 DEBUG_DEFAULT_DIR = Path("outputs/comfort_inverse_diagnostics_debug")
+ARROW_LABEL_POSITIONS = tuple(round(index / 5.0, 1) for index in range(6))
 
 
 def _balanced_permutation_index(doc: dict) -> int:
@@ -107,6 +108,29 @@ def process_arrow_length_sweep_docs(dataset: Dataset) -> Dataset:
             record.update({"arrow_length_scale": scale, "arrow_minimum_pixels": minimum})
             records.append(record)
     return _finish(records, "arrow_length_sweep")
+
+
+def process_arrow_label_endpoint_docs(dataset: Dataset) -> Dataset:
+    """Sweep semantic-label placement over six positions on each arrow.
+
+    Every condition uses exactly the same four reference-relative arrows at a
+    length of one reference-bounding-box diagonal.  A position of 0.0 is the
+    origin; 1.0 is the arrowhead.  Only label placement changes.
+    """
+    records = []
+    for doc in _normalized_docs(dataset, all_permutations=False):
+        for label_position in ARROW_LABEL_POSITIONS:
+            condition = f"position_{label_position:.1f}"
+            record = _conditioned_doc(doc, "arrow_label_endpoint", condition)
+            record.update(
+                {
+                    "arrow_length_scale": 1.0,
+                    "arrow_minimum_pixels": 0.0,
+                    "arrow_label_position": label_position,
+                }
+            )
+            records.append(record)
+    return _finish(records, "arrow_label_endpoint")
 
 
 def process_map_ablation_docs(dataset: Dataset) -> Dataset:
@@ -403,6 +427,14 @@ def doc_to_visual(doc):
             length_scale=float(doc["arrow_length_scale"]),
             minimum_length=float(doc["arrow_minimum_pixels"]),
         )
+    elif experiment == "arrow_label_endpoint":
+        image = aids._draw_reference_direction_arrows_with_scale(
+            doc,
+            image,
+            length_scale=float(doc["arrow_length_scale"]),
+            minimum_length=float(doc["arrow_minimum_pixels"]),
+            label_position=float(doc["arrow_label_position"]),
+        )
     elif experiment == "map_ablation":
         image = _map_ablation_image(doc, image)
     elif experiment == "full_map_inversion":
@@ -471,6 +503,13 @@ def _mc_prompt(doc: dict, lmms_eval_specific_kwargs=None) -> str:
         aid_text = (
             "Four labeled reference-relative arrows are overlaid on the reference object. "
             f"Their length is {doc['arrow_length_scale']} times the reference bbox diagonal."
+        )
+    elif experiment == "arrow_label_endpoint":
+        label_position = float(doc["arrow_label_position"])
+        aid_text = (
+            "Four labeled reference-relative arrows are overlaid on the reference object. "
+            "Each arrow is 1.0 times the reference bbox diagonal, and its label is at "
+            f"position {label_position:.1f} from the origin (0.0) to the arrowhead (1.0)."
         )
     elif experiment == "map_ablation":
         aid_text = _map_text(doc)

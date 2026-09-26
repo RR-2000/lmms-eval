@@ -76,3 +76,11 @@ python -m lmms_eval \
 # done
 
 # python tools/build_3dsr_prompt_variants_dataset.py --input_json /home/ramanathan/VLM/lmms-eval/outputs/3dsrbench_4B_GT_4_Blank/submissions/3dsrbench_predictions_qwen3_vl_experiments.json --source-jsonl /home/ramanathan/data/3DSR/dataset.jsonl
+
+# python tools/combine_object_map_inversion_shards.py \
+#   --shard-dirs \
+#     "outputs/experiments/object_map_inversion/comfort_object_map_20260924/shard_0/object_map_single_pass_json_bbox_diagonal_0p8" \
+#     "outputs/experiments/object_map_inversion/comfort_object_map_20260924/shard_1/object_map_single_pass_json_bbox_diagonal_0p8" \
+#   --output-dir \
+#     "outputs/experiments/object_map_inversion/comfort_object_map_20260924/combined/object_map_single_pass_json_bbox_diagonal_0p8" \
+#   --require-complete
