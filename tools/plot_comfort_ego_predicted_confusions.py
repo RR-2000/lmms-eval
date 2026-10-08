@@ -45,6 +45,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--scenes", type=Path, default=DEFAULT_SCENES)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--object-x-label",
+        default="Predicted ego-relative direction",
+        help="X-axis title for object-answer matrices; ticks and counts are unchanged.",
+    )
+    parser.add_argument(
+        "--object-y-label",
+        default="Gold ego-relative direction",
+        help="Y-axis title for object-answer matrices; ticks and counts are unchanged.",
+    )
     return parser.parse_args()
 
 
@@ -102,7 +112,14 @@ def row_percentages(counts: np.ndarray) -> np.ndarray:
     return np.divide(counts, totals, out=np.zeros_like(counts, dtype=float), where=totals != 0) * 100.0
 
 
-def plot_grid(matrices: list[tuple[str, np.ndarray]], answer_format: str, output: Path) -> None:
+def plot_grid(
+    matrices: list[tuple[str, np.ndarray]],
+    answer_format: str,
+    output: Path,
+    *,
+    x_label: str = "Predicted ego-relative direction",
+    y_label: str = "Gold ego-relative direction",
+) -> None:
     rows = int(np.ceil(len(matrices) / 2))
     figure, axes = plt.subplots(rows, 2, figsize=(15, 4.4 * rows), squeeze=False, layout="constrained")
     image = None
@@ -122,8 +139,8 @@ def plot_grid(matrices: list[tuple[str, np.ndarray]], answer_format: str, output
         axis.set_title(MODEL_LABELS.get(model, model), fontsize=12)
         axis.set_xticks(range(len(PREDICTION_LABELS)), [label.title() for label in PREDICTION_LABELS], rotation=24, ha="right")
         axis.set_yticks(range(len(DIRECTIONS)), [label.title() for label in DIRECTIONS])
-        axis.set_xlabel("Predicted ego-relative direction")
-        axis.set_ylabel("Gold ego-relative direction")
+        axis.set_xlabel(x_label)
+        axis.set_ylabel(y_label)
     for axis in axes.flat[len(matrices):]:
         axis.set_visible(False)
     figure.suptitle(f"COMFORT: Gold Ego Direction vs Prediction ({answer_format.title()} Answers)", fontsize=16)
@@ -154,6 +171,8 @@ def main() -> None:
             [(model, matrices[answer_format]) for model, matrices in ordered],
             answer_format,
             output_dir / f"ego_vs_predicted_{answer_format}_answers.png",
+            x_label=args.object_x_label if answer_format == "object" else "Predicted ego-relative direction",
+            y_label=args.object_y_label if answer_format == "object" else "Gold ego-relative direction",
         )
 
     serializable = {

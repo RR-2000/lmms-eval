@@ -29,6 +29,16 @@ def parse_args() -> argparse.Namespace:
         help="Output directory (default: the report's directory)",
     )
     parser.add_argument("--dpi", type=int, default=200, help="Output resolution")
+    parser.add_argument(
+        "--object-x-label",
+        default="Selected direction",
+        help="X-axis title for the object-task matrix; ticks and counts are unchanged.",
+    )
+    parser.add_argument(
+        "--object-y-label",
+        default="True direction",
+        help="Y-axis title for the object-task matrix; ticks and counts are unchanged.",
+    )
     return parser.parse_args()
 
 
@@ -72,6 +82,9 @@ def save_confusion_matrix(
     counts: np.ndarray,
     output_path: Path,
     dpi: int,
+    *,
+    x_label: str = "Selected direction",
+    y_label: str = "True direction",
 ) -> None:
     row_totals = counts.sum(axis=1, keepdims=True)
     percentages = np.divide(
@@ -98,8 +111,8 @@ def save_confusion_matrix(
         cbar_kws={"shrink": 0.75, "format": "%.0f%%"},
         ax=axis,
     )
-    axis.set_xlabel("Selected direction")
-    axis.set_ylabel("True direction")
+    axis.set_xlabel(x_label)
+    axis.set_ylabel(y_label)
     axis.tick_params(axis="x", rotation=0)
     axis.tick_params(axis="y", rotation=0)
     figure.tight_layout()
@@ -118,6 +131,8 @@ def main() -> None:
             counts_matrix(distributions, task_key),
             output_path,
             args.dpi,
+            x_label=args.object_x_label if task_key == "object_tasks" else "Selected direction",
+            y_label=args.object_y_label if task_key == "object_tasks" else "True direction",
         )
         print(f"Saved: {output_path}")
 

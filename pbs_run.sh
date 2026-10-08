@@ -45,6 +45,7 @@ conda activate /home/ramanathan/.conda/envs/lmms
 # comfort_direction_object
 # comfort_direction_object_polling 
 # kubric_movi_a_direction_object_relative_direction_polling
+# kubric_movi_a_direction_object_relative_direction
 # comfort_direction_object_target_only_gt_polling
 # comfort_full_map_inversion comfort_arrow_length_sweep comfort_map_ablation comfort_option_permutation
 # comfort_direction_object_gt_help
