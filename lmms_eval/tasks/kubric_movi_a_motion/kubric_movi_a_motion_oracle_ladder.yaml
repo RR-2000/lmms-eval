@@ -1,0 +1,3 @@
+task: kubric_movi_a_motion_oracle_ladder
+include: _default_template_yaml
+process_docs: !function utils.process_oracle_ladder_docs

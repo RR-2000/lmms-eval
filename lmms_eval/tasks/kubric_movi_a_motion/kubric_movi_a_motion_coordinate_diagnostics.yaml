@@ -1,0 +1,3 @@
+task: kubric_movi_a_motion_coordinate_diagnostics
+include: _default_template_yaml
+process_docs: !function utils.process_coordinate_docs

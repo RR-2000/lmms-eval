@@ -1,5 +1,9 @@
 import time
 import os
+import hashlib
+import json
+import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -34,6 +38,42 @@ from lmms_eval.protocol import ChatMessages
 process_vision_info, _has_qwen_vl = optional_import("qwen_vl_utils", "process_vision_info")
 if not _has_qwen_vl:
     eval_logger.warning("Failed to import qwen_vl_utils; Please install it via `pip install qwen-vl-utils`")
+
+
+_MOTION_TRACE_LOCK = threading.Lock()
+
+
+def _motion_trace_update(doc, **fields) -> None:
+    """Add model-rendered inputs to an opt-in MOVi motion trace record."""
+
+    root_value = os.getenv("MOVI_MOTION_TRACE_DIR", "").strip()
+    if not root_value or not isinstance(doc, dict) or "scaffold_condition" not in doc:
+        return
+    root = Path(root_value)
+    suite = str(doc.get("scaffold_suite", "unknown"))
+    qid = str(doc.get("qid", doc.get("index", "unknown")))
+    digest = hashlib.sha1(f"{suite}::{qid}".encode()).hexdigest()
+    condition = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(doc.get("scaffold_condition", "unknown")))
+    path = root / "records" / f"{digest}_{condition}.json"
+    with _MOTION_TRACE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {}
+        if path.is_file():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+        payload.update(fields)
+        payload.setdefault("trace_version", 1)
+        payload.setdefault("qid", qid)
+        payload.setdefault("source_qid", str(doc.get("source_qid", qid)))
+        payload.setdefault("sequence_id", str(doc.get("sequence_id", "")))
+        payload.setdefault("subtask", str(doc.get("subtask", "")))
+        payload.setdefault("scaffold_suite", suite)
+        payload.setdefault("scaffold_condition", str(doc.get("scaffold_condition", "baseline")))
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(temporary, path)
 
 
 @register_model("qwen3_vl_experiments_chat")
@@ -129,6 +169,39 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
                     return_tensors="pt",
                 )
 
+            trace_docs = []
+            for b, (ids, task_name, split_name) in enumerate(zip(doc_id, task, split)):
+                try:
+                    trace_doc = self.task_dict[task_name][split_name][ids]
+                except Exception:
+                    trace_doc = None
+                trace_docs.append(trace_doc)
+                if isinstance(trace_doc, dict):
+                    tensor_shapes = {
+                        key: list(value.shape)
+                        for key, value in inputs.items()
+                        if hasattr(value, "shape")
+                    }
+                    input_tokens = None
+                    if "attention_mask" in inputs:
+                        try:
+                            input_tokens = int(inputs["attention_mask"][b].sum().item())
+                        except Exception:
+                            input_tokens = None
+                    _motion_trace_update(
+                        trace_doc,
+                        model_input={
+                            "task_name": task_name,
+                            "rendered_chat_prompt": texts[b] if b < len(texts) else None,
+                            "hf_messages": batched_messages[b] if b < len(batched_messages) else None,
+                            "processor_tensor_shapes": tensor_shapes,
+                            "input_token_count": input_tokens,
+                            "image_input_count": len(image_inputs) if image_inputs is not None else 0,
+                            "video_input_count": len(video_inputs) if video_inputs is not None else 0,
+                            "generation_kwargs": all_gen_kwargs[b],
+                        },
+                    )
+
             if self.device_map == "auto":
                 inputs = inputs.to("cuda")
             else:
@@ -185,9 +258,20 @@ class Qwen3_VL_Experiments(Qwen3_VL_ExperimentsSimple):
             total_tokens += sum(len(ids) for ids in generated_ids_trimmed)
 
             for i, (ans, context) in enumerate(zip(answers, texts)):
+                decoded_response = ans
                 ans = self._strip_thinking(ans)
                 res.append(GenerationResult(text=ans, token_counts=TokenCounts(output_tokens=len(generated_ids_trimmed[i]))))
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
+
+                if i < len(trace_docs) and isinstance(trace_docs[i], dict):
+                    _motion_trace_update(
+                        trace_docs[i],
+                        model_output={
+                            "decoded_response_before_thinking_strip": decoded_response,
+                            "returned_response": ans,
+                            "output_token_count": len(generated_ids_trimmed[i]),
+                        },
+                    )
 
                 eval_logger.debug(f"Question: {context}")
                 eval_logger.debug(f"Model Response: {ans}")

@@ -1,0 +1,3 @@
+task: kubric_movi_a_motion
+include: _default_template_yaml
+process_docs: !function utils.process_baseline_docs

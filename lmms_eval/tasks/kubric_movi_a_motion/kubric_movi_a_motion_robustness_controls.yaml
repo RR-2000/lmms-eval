@@ -1,0 +1,3 @@
+task: kubric_movi_a_motion_robustness_controls
+include: _default_template_yaml
+process_docs: !function utils.process_robustness_docs

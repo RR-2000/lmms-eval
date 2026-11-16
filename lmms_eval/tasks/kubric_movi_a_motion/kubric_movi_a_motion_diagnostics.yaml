@@ -1,0 +1,11 @@
+group: kubric_movi_a_motion_diagnostics
+task:
+  - kubric_movi_a_motion_visual_scale_assistance
+  - kubric_movi_a_motion_oracle_ladder
+  - kubric_movi_a_motion_perception_diagnostics
+  - kubric_movi_a_motion_temporal_diagnostics
+  - kubric_movi_a_motion_coordinate_diagnostics
+  - kubric_movi_a_motion_calculation_diagnostics
+  - kubric_movi_a_motion_representation_diagnostics
+  - kubric_movi_a_motion_precision_diagnostics
+  - kubric_movi_a_motion_robustness_controls

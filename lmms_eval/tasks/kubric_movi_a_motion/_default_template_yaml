@@ -1,0 +1,40 @@
+dataset_path: parquet
+dataset_kwargs:
+  data_files:
+    test: /home/ramanathan/data/movi_a_motion/qa.parquet
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.doc_to_visual
+doc_to_text: !function utils.doc_to_text
+doc_to_target: !function utils.doc_to_target
+process_results: !function utils.process_results
+generation_kwargs:
+  max_new_tokens: 32
+  temperature: 0
+  top_p: 1.0
+  do_sample: false
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: "These are the ordered frames of a 12 FPS rigid-body simulation."
+    post_prompt: "Answer with only the option letter A, B, C, D, or E."
+metric_list:
+  - metric: accuracy
+    aggregation: !function utils.aggregate_accuracy
+    higher_is_better: true
+  - metric: baseline_accuracy
+    aggregation: !function utils.aggregate_baseline_accuracy
+    higher_is_better: true
+  - metric: assisted_accuracy
+    aggregation: !function utils.aggregate_assisted_accuracy
+    higher_is_better: true
+  - metric: paired_scaffold_gain
+    aggregation: !function utils.aggregate_paired_gain
+    higher_is_better: true
+  - metric: parse_success
+    aggregation: !function utils.aggregate_parse_success
+    higher_is_better: true
+  - metric: numeric_option_error
+    aggregation: !function utils.aggregate_numeric_error
+    higher_is_better: false
+metadata:
+  - version: 1.0
